@@ -1,0 +1,10 @@
+{
+    "STT_ENDPOINT": "http://127.0.0.1:8969/v1/audio/transcriptions",
+    "STT_MODEL": "Systran/faster-whisper-medium.en",
+    "STREAMING_MODE": true,
+    "BEEP_ENABLED": true,
+    "SILENCE_THRESHOLD": 0.015,
+    "DEVICE_INDEX": null,
+    "HOTKEY_STR": "<cmd>+<shift>+s",
+    "SILENCE_DURATION": 0.8
+}

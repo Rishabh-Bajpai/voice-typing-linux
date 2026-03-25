@@ -1,0 +1,28 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov flask flask-cors requests numpy
+
+      - name: Syntax check
+        run: python -m py_compile app.py voice_dictation.py
+
+      - name: Run tests with coverage
+        run: pytest -q --cov=app --cov=voice_dictation --cov-report=term-missing

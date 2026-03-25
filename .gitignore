@@ -1,0 +1,20 @@
+# Environment files
+.env
+
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Tool caches/reports
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Build/packaging artifacts
+*.egg-info/
+build/
+dist/

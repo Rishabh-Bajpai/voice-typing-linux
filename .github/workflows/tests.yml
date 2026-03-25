@@ -25,4 +25,6 @@ jobs:
         run: python -m py_compile app.py voice_dictation.py
 
       - name: Run tests with coverage
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: pytest -q --cov=app --cov=voice_dictation --cov-report=term-missing

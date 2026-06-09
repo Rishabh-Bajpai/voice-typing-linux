@@ -22,7 +22,10 @@ Then open `http://127.0.0.1:3221` in your browser to access the web UI.
 - **Global Hotkey** — Press `Cmd+Shift+S` to start/stop recording from anywhere
 - **Dual Modes** — Choose between streaming (real-time) or batch transcription
 - **Auto-Typing** — Automatically types transcribed text into the active window
-- **Web UI** — Control settings, view status, and manage microphone selection
+- **Web UI** — Control settings, view status, manage microphone selection, and test hardware
+- **Mic Test** — Real-time 12-bar VU meter with dBFS readout to verify your microphone
+- **STT Test** — Record a 2-second sample and send it to the endpoint to verify transcription works
+- **Transcription History** — Scrollable log of all transcriptions with timestamps and source modes
 - **Native Notifications** — Desktop notifications for recording status
 - **Audio Feedback** — Optional beep sounds when starting/stopping (configurable)
 
@@ -47,6 +50,7 @@ Configure via environment variables in `.env`:
 | `VOICE_TYPING_SILENCE_DURATION` | `0.8` | Seconds of silence to stop recording |
 | `VOICE_TYPING_BEEP` | `1` | Set `0` to disable beep sounds |
 | `VOICE_TYPING_HOTKEY` | `<cmd>+<shift>+s` | Global hotkey to toggle recording |
+| `VOICE_TYPING_PULSE_SOURCE` | (none) | PulseAudio source name for PA-only devices |
 | `VOICE_TYPING_UI_HOST` | `127.0.0.1` | Web UI bind address |
 | `VOICE_TYPING_UI_PORT` | `3221` | Web UI port |
 
@@ -76,3 +80,4 @@ Configure via environment variables in `.env`:
 | Hotkey not working | Choose a different hotkey if your desktop environment uses the same shortcut |
 | Wayland typing issues | Use `ydotool` or run in an X11 environment where key injection is allowed |
 | Microphone not detected | Check input device selection in the web UI |
+| USB/PulseAudio device not in list | It will appear with a `pulse_source` field and route through the "default" ALSA device |

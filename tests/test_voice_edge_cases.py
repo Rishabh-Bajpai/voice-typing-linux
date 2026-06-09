@@ -5,7 +5,7 @@ import numpy as np
 
 
 class ImmediateThread:
-    def __init__(self, target=None, daemon=None):
+    def __init__(self, target=None, daemon=None, **kwargs):
         self.target = target
 
     def start(self):
@@ -43,10 +43,27 @@ def test_audio_recorder_init_falls_back_when_query_fails(vd, monkeypatch):
 
 
 def test_get_input_devices_success_and_exception(vd, monkeypatch):
-    rec = vd.AudioRecorder()
+    fake_devices = [
+        {"name": "Dummy (hw:0,0)", "max_input_channels": 2, "hostapi": 0},
+    ]
+    monkeypatch.setattr(vd.sd, "query_devices", lambda: fake_devices)
 
+    fake_pactl_src = (
+        '\tName: alsa_input.test_device_1\n'
+        '\tDescription: Test Mic 1\n'
+        '\tProperties:\n'
+        '\t\talsa.card = "0"\n'
+    )
+    monkeypatch.setattr(
+        vd.subprocess, "run",
+        lambda cmd, **kw: SimpleNamespace(stdout=fake_pactl_src, returncode=0),
+    )
+
+    rec = vd.AudioRecorder()
     devices = rec.get_input_devices()
-    assert len(devices) == 2
+    assert len(devices) >= 1
+    assert "(audio)" in devices[0]["name"]
+    assert devices[0]["index"] >= 0
 
     monkeypatch.setattr(
         vd.sd,
@@ -154,7 +171,7 @@ def test_toggle_recording_streaming_starts_worker_thread(vd, monkeypatch):
     monkeypatch.setattr(vd.threading, "Thread", CountThread)
     monkeypatch.setattr(app, "notify", lambda *a, **k: None)
     monkeypatch.setattr(app, "play_beep", lambda *a, **k: None)
-    monkeypatch.setattr(app.recorder, "start", lambda device_index=None: None)
+    monkeypatch.setattr(app.recorder, "start", lambda device_index=None, **kw: None)
 
     app.toggle_recording()
     assert app.is_recording is True

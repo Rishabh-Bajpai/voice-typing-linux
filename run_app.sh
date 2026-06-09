@@ -1,21 +1,30 @@
 #!/bin/bash
+set -e
 
-# Configuration - update these for your machine
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONDA_PATH="$HOME/miniconda3"
-ENV_NAME="voiceTyping"
-
-# Navigate to project directory
 cd "$PROJECT_DIR"
 
-# Initialize conda
-if [ ! -f "$CONDA_PATH/etc/profile.d/conda.sh" ]; then
-  echo "Could not find conda.sh at $CONDA_PATH/etc/profile.d/conda.sh"
-  exit 1
+# Auto-detect conda
+CONDA_CMD="$(command -v conda || true)"
+if [ -z "$CONDA_CMD" ] && [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+elif [ -z "$CONDA_CMD" ] && [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/anaconda3/etc/profile.d/conda.sh"
+elif [ -n "$CONDA_CMD" ]; then
+    # conda is on PATH already, good
+    :
+else
+    echo "Conda not found. Install Miniconda or Anaconda first."
+    exit 1
 fi
 
-source "$CONDA_PATH/etc/profile.d/conda.sh"
+ENV_NAME="${CONDA_DEFAULT_ENV:-voiceTyping}"
 
-# Activate environment and run the app
-conda activate "$ENV_NAME"
+if conda env list | grep -q "$ENV_NAME"; then
+    conda activate "$ENV_NAME"
+else
+    echo "Environment '$ENV_NAME' not found. Create it with: conda create -n $ENV_NAME python=3.11"
+    exit 1
+fi
+
 python app.py

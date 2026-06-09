@@ -1,6 +1,9 @@
 # Environment files
 .env
 
+# Auto-generated user config (created on first save)
+config.json
+
 # Python cache/artifacts
 __pycache__/
 *.py[cod]
@@ -18,3 +21,9 @@ venv/
 *.egg-info/
 build/
 dist/
+
+# Audio files (generated during recording)
+*.wav
+
+# Playwright browser testing artifacts
+.playwright-mcp/

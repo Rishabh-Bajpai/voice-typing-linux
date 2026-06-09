@@ -1,12 +1,11 @@
 from flask import Flask, jsonify, request, render_template_string
 from flask_cors import CORS
-import threading
 import os
 import voice_dictation
 from voice_dictation import VoiceDictationApp
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=["http://127.0.0.1:3221", "http://localhost:3221"])
 
 # Initialize the dictation app
 dict_app = VoiceDictationApp()
@@ -143,7 +142,7 @@ HTML_TEMPLATE = """
 
         .controls {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 1rem;
             margin-bottom: 2.5rem;
         }
@@ -242,6 +241,250 @@ HTML_TEMPLATE = """
             display: none;
             z-index: 100;
         }
+
+        .mic-meter {
+            display: none;
+            margin-top: 1.5rem;
+            padding: 1.25rem 1.5rem;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .mic-meter.visible {
+            display: block;
+        }
+
+        .meter-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .meter-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .meter-info {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .meter-db {
+            font-size: 1.1rem;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+            min-width: 4.5rem;
+            text-align: right;
+        }
+
+        .meter-db.low { color: var(--success); }
+        .meter-db.mid { color: var(--primary); }
+        .meter-db.high { color: var(--danger); }
+
+        .meter-timer {
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .meter-track {
+            display: flex;
+            gap: 4px;
+            height: 32px;
+            align-items: flex-end;
+        }
+
+        .meter-bar {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 3px;
+            transition: height 0.06s ease, background 0.06s ease, box-shadow 0.06s ease;
+            align-self: flex-end;
+        }
+
+        .meter-bar.lit {
+            box-shadow: 0 0 6px rgba(56, 189, 248, 0.3);
+        }
+
+        .meter-bar:nth-child(1).lit,
+        .meter-bar:nth-child(2).lit,
+        .meter-bar:nth-child(3).lit { background: #4ade80; }
+        .meter-bar:nth-child(4).lit,
+        .meter-bar:nth-child(5).lit,
+        .meter-bar:nth-child(6).lit { background: #38bdf8; }
+        .meter-bar:nth-child(7).lit,
+        .meter-bar:nth-child(8).lit,
+        .meter-bar:nth-child(9).lit { background: #818cf8; }
+        .meter-bar:nth-child(10).lit,
+        .meter-bar:nth-child(11).lit,
+        .meter-bar:nth-child(12).lit { background: #fb7185; }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            padding: 0.75rem 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            margin-top: 1.5rem;
+            user-select: none;
+            transition: background 0.2s;
+        }
+
+        .section-header:hover {
+            background: rgba(0, 0, 0, 0.35);
+        }
+
+        .section-header .label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .section-header .count {
+            font-size: 0.75rem;
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .section-header .chevron {
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            transition: transform 0.2s;
+        }
+
+        .section-header .chevron.open {
+            transform: rotate(90deg);
+        }
+
+        .section-body {
+            display: none;
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            margin-top: 0.5rem;
+            padding: 0.5rem 0;
+        }
+
+        .section-body.open {
+            display: block;
+        }
+
+        .history-entry {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.6rem;
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            font-size: 0.85rem;
+        }
+
+        .history-entry:last-child {
+            border-bottom: none;
+        }
+
+        .history-time {
+            color: var(--text-dim);
+            font-size: 0.75rem;
+            white-space: nowrap;
+            min-width: 3.5rem;
+            padding-top: 0.05rem;
+        }
+
+        .history-text {
+            color: var(--text);
+            line-height: 1.4;
+            word-break: break-word;
+        }
+
+        .history-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-top: 0.35rem;
+        }
+
+        .history-dot.streaming { background: var(--primary); }
+        .history-dot.batch { background: var(--accent); }
+
+        .stt-test-area {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .stt-result {
+            display: none;
+            grid-column: span 2;
+            padding: 1rem 1.25rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+
+        .stt-result.visible {
+            display: block;
+        }
+
+        .stt-result .row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.3rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .stt-result .row:last-child {
+            border-bottom: none;
+        }
+
+        .stt-result .key {
+            color: var(--text-dim);
+        }
+
+        .stt-result .val {
+            color: var(--text);
+            text-align: right;
+            max-width: 60%;
+            word-break: break-word;
+        }
+
+        .stt-result .val.success { color: var(--success); }
+        .stt-result .val.fail { color: var(--danger); }
+
+        .btn-stt {
+            background: linear-gradient(135deg, #a78bfa, #818cf8);
+            color: white;
+            box-shadow: 0 10px 25px -5px rgba(129, 140, 248, 0.4);
+        }
+
+        .btn-stt:hover {
+            transform: translateY(-3px);
+            filter: brightness(1.1);
+            box-shadow: 0 20px 30px -10px rgba(129, 140, 248, 0.6);
+        }
+
+        .btn-stt:disabled {
+            opacity: 0.5;
+            transform: none;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -306,6 +549,50 @@ HTML_TEMPLATE = """
             <div class="controls">
                 <button onclick="toggleService()" class="btn-primary" id="toggleBtn">Start Daemon</button>
                 <button onclick="toggleRecording()" class="btn-secondary" id="recBtn">Manual Dictate</button>
+                <button onclick="toggleMicTest()" class="btn-secondary" id="micTestBtn">Test Mic</button>
+            </div>
+
+            <div class="mic-meter" id="micMeter">
+                <div class="meter-header">
+                    <span class="meter-label">Microphone Level</span>
+                    <div class="meter-info">
+                        <span class="meter-db" id="meterDb">-inf dB</span>
+                        <span class="meter-timer" id="meterTimer">5s</span>
+                    </div>
+                </div>
+                <div class="meter-track" id="meterTrack">
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                    <div class="meter-bar"></div>
+                </div>
+            </div>
+
+            <div class="stt-test-area">
+                <button onclick="testStt()" class="btn-stt" id="sttTestBtn">Test STT Endpoint</button>
+                <span></span>
+                <div class="stt-result" id="sttResult">
+                    <div class="row"><span class="key">Endpoint</span><span class="val" id="sttEndpointVal"></span></div>
+                    <div class="row"><span class="key">Model</span><span class="val" id="sttModelVal"></span></div>
+                    <div class="row"><span class="key">Time</span><span class="val" id="sttTimeVal"></span></div>
+                    <div class="row"><span class="key">Result</span><span class="val" id="sttResultVal"></span></div>
+                </div>
+            </div>
+
+            <div class="section-header" onclick="toggleHistory()">
+                <span class="label">Transcription History</span>
+                <span><span class="count" id="historyCount">0</span> <span class="chevron" id="historyChevron">▶</span></span>
+            </div>
+            <div class="section-body" id="historyBody">
+                <div class="history-entry" style="color:var(--text-dim);padding:1rem;text-align:center">No transcriptions yet</div>
             </div>
 
             <div class="log-container" id="logs">
@@ -325,13 +612,20 @@ HTML_TEMPLATE = """
                 const devices = await res.json();
                 const sel = document.getElementById('deviceSelect');
                 sel.innerHTML = '';
+                const activeIdx = {{ active_device if active_device is not none else -1 }};
+                let hadActive = false;
                 devices.forEach(d => {
                     const opt = document.createElement('option');
                     opt.value = d.index;
                     opt.text = d.name;
-                    if (d.index == {{ active_device if active_device is not none else -1 }}) opt.selected = true;
+                    opt.dataset.pulseSource = d.pulse_source || '';
+                    if (d.index == activeIdx) { opt.selected = true; hadActive = true; }
                     sel.appendChild(opt);
                 });
+                if (!hadActive && devices.length > 0) {
+                    sel.value = devices[0].index;
+                    autoSave();
+                }
             } catch (e) { console.error("Device load failed", e); }
         }
 
@@ -382,12 +676,17 @@ HTML_TEMPLATE = """
         }
 
         async function autoSave() {
+            const devSelect = document.getElementById('deviceSelect');
+            const devIdx = devSelect.value;
+            const devOpt = devSelect.selectedOptions[0];
+            const pulseSource = devOpt ? devOpt.dataset.pulsesource || '' : '';
             const settings = {
                 stt_endpoint: document.getElementById('sttEndpoint').value,
                 stt_model: document.getElementById('sttModel').value,
                 hotkey: document.getElementById('hotkey').value,
                 streaming: document.getElementById('streamingMode').value === "1",
-                device_index: document.getElementById('deviceSelect').value,
+                device_index: devIdx,
+                pulse_source: pulseSource,
                 silence_threshold: document.getElementById('silenceThreshold').value,
                 beep_enabled: document.getElementById('beepEnabled').value === "1"
             };
@@ -413,9 +712,140 @@ HTML_TEMPLATE = """
             updateStatus();
         }
 
+        let micTestActive = false;
+        let micTestStartTime = null;
+        let micTestInterval = null;
+
+        async function toggleMicTest() {
+            if (micTestActive) {
+                await stopMicTest();
+            } else {
+                await startMicTest();
+            }
+        }
+
+        async function startMicTest() {
+            await fetch('/test_mic/start', {method: 'POST'});
+            micTestActive = true;
+            micTestStartTime = Date.now();
+            document.getElementById('micTestBtn').innerText = 'Stop Test';
+            document.getElementById('micTestBtn').className = 'btn-primary';
+            document.getElementById('micMeter').classList.add('visible');
+            micTestInterval = setInterval(updateMeter, 80);
+        }
+
+        async function stopMicTest() {
+            await fetch('/test_mic/stop', {method: 'POST'});
+            micTestActive = false;
+            if (micTestInterval) clearInterval(micTestInterval);
+            micTestInterval = null;
+            document.getElementById('micTestBtn').innerText = 'Test Mic';
+            document.getElementById('micTestBtn').className = 'btn-secondary';
+            document.getElementById('micMeter').classList.remove('visible');
+        }
+
+        async function updateMeter() {
+            try {
+                const res = await fetch('/test_mic/level');
+                const data = await res.json();
+                let level = parseFloat(data.level) || 0;
+                level = Math.min(1, Math.max(0, level));
+                const bars = document.querySelectorAll('.meter-bar');
+                const n = bars.length;
+                const active = Math.round(level * n);
+                bars.forEach((bar, i) => {
+                    bar.classList.toggle('lit', i < active);
+                    const pct = ((i + 1) / n) * 100;
+                    bar.style.height = Math.max(4, pct * 0.7) + '%';
+                });
+
+                const dbEl = document.getElementById('meterDb');
+                if (level > 0.001) {
+                    const db = 20 * Math.log10(level);
+                    const dbStr = db.toFixed(1);
+                    dbEl.innerText = dbStr + ' dB';
+                    dbEl.className = 'meter-db' + (db > -12 ? ' high' : db > -24 ? ' mid' : ' low');
+                } else {
+                    dbEl.innerText = '-inf dB';
+                    dbEl.className = 'meter-db low';
+                }
+
+                const elapsed = (Date.now() - micTestStartTime) / 1000;
+                const remaining = Math.max(0, 5 - elapsed);
+                document.getElementById('meterTimer').innerText = Math.ceil(remaining) + 's';
+                if (remaining <= 0) await stopMicTest();
+            } catch (e) {}
+        }
+
+        let historyOpen = false;
+
+        function toggleHistory() {
+            historyOpen = !historyOpen;
+            document.getElementById('historyBody').classList.toggle('open', historyOpen);
+            document.getElementById('historyChevron').classList.toggle('open', historyOpen);
+        }
+
+        async function updateHistory() {
+            try {
+                const res = await fetch('/history');
+                const entries = await res.json();
+                document.getElementById('historyCount').innerText = entries.length;
+                const body = document.getElementById('historyBody');
+                if (!entries.length) {
+                    body.innerHTML = '<div class="history-entry" style="color:var(--text-dim);padding:1rem;text-align:center">No transcriptions yet</div>';
+                    return;
+                }
+                body.innerHTML = entries.slice().reverse().map(e =>
+                    '<div class="history-entry">' +
+                    '<span class="history-dot ' + e.source + '"></span>' +
+                    '<span class="history-time">' + e.time + '</span>' +
+                    '<span class="history-text">' + escapeHtml(e.text) + '</span>' +
+                    '</div>'
+                ).join('');
+            } catch (e) {}
+        }
+
+        function escapeHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        async function testStt() {
+            const btn = document.getElementById('sttTestBtn');
+            btn.disabled = true;
+            btn.innerText = 'Recording for 2s...';
+            const resultEl = document.getElementById('sttResult');
+            resultEl.classList.remove('visible');
+            try {
+                const res = await fetch('/test_stt', {method: 'POST'});
+                const data = await res.json();
+                document.getElementById('sttEndpointVal').innerText = data.endpoint;
+                document.getElementById('sttModelVal').innerText = data.model;
+                if (data.success) {
+                    document.getElementById('sttTimeVal').innerHTML = '<span class="val success">' + data.elapsed + 's</span>';
+                    document.getElementById('sttResultVal').innerHTML = '<span class="val success">' + escapeHtml(data.text) + '</span>';
+                } else {
+                    document.getElementById('sttTimeVal').innerHTML = '<span class="val fail">—</span>';
+                    document.getElementById('sttResultVal').innerHTML = '<span class="val fail">' + escapeHtml(data.error) + '</span>';
+                }
+                resultEl.classList.add('visible');
+            } catch (e) {
+                document.getElementById('sttEndpointVal').innerText = '—';
+                document.getElementById('sttModelVal').innerText = '—';
+                document.getElementById('sttTimeVal').innerHTML = '<span class="val fail">—</span>';
+                document.getElementById('sttResultVal').innerHTML = '<span class="val fail">' + e.message + '</span>';
+                resultEl.classList.add('visible');
+            }
+            btn.disabled = false;
+            btn.innerText = 'Test STT Endpoint';
+        }
+
         loadDevices();
         setInterval(updateStatus, 1000);
+        setInterval(updateHistory, 2000);
         updateStatus();
+        updateHistory();
     </script>
 </body>
 </html>
@@ -452,6 +882,7 @@ def save_settings():
         device_index=data.get("device_index"),
         silence_threshold=data.get("silence_threshold"),
         beep_enabled=data.get("beep_enabled"),
+        pulse_source=data.get("pulse_source"),
     )
     return jsonify({"success": True})
 
@@ -483,6 +914,38 @@ def toggle_recording():
         dict_app.start_service()
     dict_app.toggle_recording()
     return jsonify({"success": True})
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
+
+
+@app.route("/test_mic/start", methods=["POST"])
+def start_mic_test():
+    dict_app.start_mic_test()
+    return jsonify({"success": True})
+
+
+@app.route("/test_mic/stop", methods=["POST"])
+def stop_mic_test():
+    dict_app.stop_mic_test()
+    return jsonify({"success": True})
+
+
+@app.route("/test_mic/level")
+def mic_test_level():
+    return jsonify({"level": dict_app.get_mic_test_level()})
+
+
+@app.route("/history")
+def get_history():
+    return jsonify(dict_app.transcription_history)
+
+
+@app.route("/test_stt", methods=["POST"])
+def test_stt():
+    return jsonify(dict_app.test_stt_endpoint())
 
 
 if __name__ == "__main__":

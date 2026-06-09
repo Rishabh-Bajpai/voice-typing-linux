@@ -1,10 +1,8 @@
-from types import SimpleNamespace
-
 import numpy as np
 
 
 class ImmediateThread:
-    def __init__(self, target=None, daemon=None):
+    def __init__(self, target=None, daemon=None, **kwargs):
         self.target = target
 
     def start(self):
@@ -48,7 +46,7 @@ def test_toggle_recording_start_and_stop_non_streaming(vd, monkeypatch):
     monkeypatch.setattr(
         app.recorder,
         "start",
-        lambda device_index=None: events.__setitem__("start_called_with", device_index),
+        lambda device_index=None, **kw: events.__setitem__("start_called_with", device_index),
     )
     monkeypatch.setattr(app.recorder, "stop", lambda: "/tmp/a.wav")
     monkeypatch.setattr(app, "transcribe", lambda p: "hello")

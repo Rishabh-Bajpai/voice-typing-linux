@@ -1,8 +1,8 @@
 import os
-import sys
 import threading
 import time
 import json
+import re
 import requests
 import sounddevice as sd
 import scipy.io.wavfile as wav
@@ -10,6 +10,7 @@ import numpy as np
 from pynput import keyboard
 import subprocess
 import queue
+
 
 CHANNELS = 1
 RATE = 16000
@@ -33,6 +34,7 @@ def load_config():
         "SILENCE_DURATION": float(os.getenv("VOICE_TYPING_SILENCE_DURATION", "0.8")),
         "BEEP_ENABLED": os.getenv("VOICE_TYPING_BEEP", "1") == "1",
         "HOTKEY_STR": os.getenv("VOICE_TYPING_HOTKEY", "<cmd>+<shift>+s"),
+        "PULSE_SOURCE_NAME": os.getenv("VOICE_TYPING_PULSE_SOURCE", None),
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -62,7 +64,9 @@ SILENCE_THRESHOLD = CONFIG["SILENCE_THRESHOLD"]
 SILENCE_DURATION = CONFIG["SILENCE_DURATION"]
 BEEP_ENABLED = CONFIG["BEEP_ENABLED"]
 HOTKEY_STR = CONFIG["HOTKEY_STR"]
+PULSE_SOURCE_NAME = CONFIG["PULSE_SOURCE_NAME"]
 
+_config_lock = threading.Lock()
 
 class AudioRecorder:
     def __init__(self):
@@ -70,6 +74,7 @@ class AudioRecorder:
         self.recording = False
         self.rate = RATE
         self.device_index = None
+        self.pulse_source_name = None
         self.stream_queue = queue.Queue()
         self.stream = None
 
@@ -98,26 +103,97 @@ class AudioRecorder:
     def get_input_devices(self):
         devices = []
         try:
-            device_list = sd.query_devices()
-            for i, d in enumerate(device_list):
+            sd_devices = sd.query_devices()
+            alsa_card_to_sd = {}
+            for i, d in enumerate(sd_devices):
                 if d["max_input_channels"] > 0:
-                    api_name = sd.query_hostapis(d["hostapi"])["name"]
-                    name = f"{d['name']} ({api_name})"
-                    devices.append({"index": i, "name": name})
+                    m = re.search(r"\(hw:(\d+),", str(d["name"]))
+                    if m:
+                        alsa_card_to_sd[int(m.group(1))] = i
+
+            pactl_out = subprocess.run(
+                ["pactl", "list", "sources"], capture_output=True, text=True, timeout=3
+            ).stdout
+
+            sources = []
+            cur = {}
+            in_props = False
+            for line in pactl_out.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("Name:") and not in_props:
+                    if cur:
+                        sources.append(cur)
+                    cur = {"name": stripped.split(":", 1)[1].strip(), "alsa_card": None}
+                elif stripped.startswith("Description:") and not in_props:
+                    cur["desc"] = stripped.split(":", 1)[1].strip()
+                elif stripped == "Properties:":
+                    in_props = True
+                elif in_props and stripped.startswith("alsa.card ="):
+                    cur["alsa_card"] = stripped.split("=", 1)[1].strip().strip('"')
+                elif in_props and stripped == "":
+                    in_props = False
+                elif stripped == "" and cur:
+                    sources.append(cur)
+                    cur = {}
+                    in_props = False
+            if cur:
+                sources.append(cur)
+
+            seen = set()
+            for s in sources:
+                src_name = s.get("name", "")
+                desc = s.get("desc", "")
+                alsa_card = s.get("alsa_card")
+
+                if ".monitor" in src_name or (desc and desc.startswith("Monitor of")):
+                    continue
+                if desc in seen:
+                    continue
+                if desc:
+                    seen.add(desc)
+
+                sd_idx = None
+                if alsa_card and alsa_card.isdigit():
+                    sd_idx = alsa_card_to_sd.get(int(alsa_card))
+
+                label = desc or src_name
+                if sd_idx is not None:
+                    devices.append({"index": sd_idx, "name": f"(audio) {label}"})
+                else:
+                    devices.append({
+                        "index": 9,
+                        "name": f"(audio) {label}",
+                        "pulse_source": src_name,
+                    })
+
+            devices.sort(key=lambda d: d["index"] if d.get("pulse_source") else d["index"])
         except Exception as e:
-            print(f"Error listing devices: {e}")
+            print(f"PulseAudio device listing failed, falling back: {e}")
+            try:
+                device_list = sd.query_devices()
+                for i, d in enumerate(device_list):
+                    if d["max_input_channels"] > 0:
+                        api_name = sd.query_hostapis(d["hostapi"])["name"]
+                        name = f"{d['name']} ({api_name})"
+                        devices.append({"index": i, "name": name})
+            except Exception as e2:
+                print(f"Error listing devices: {e2}")
         return devices
 
-    def start(self, device_index=None):
+    def start(self, device_index=None, pulse_source=None):
         self.frames = []
         self.recording = True
 
-        # Ensure target_device is an integer index
         try:
             raw_target = device_index if device_index is not None else self.device_index
             target_device = int(raw_target)
         except (ValueError, TypeError):
             target_device = raw_target
+
+        pulse_src = pulse_source or self.pulse_source_name
+        old_pulse = os.environ.get("PULSE_SOURCE")
+        if pulse_src:
+            os.environ["PULSE_SOURCE"] = pulse_src
 
         while not self.stream_queue.empty():
             try:
@@ -142,7 +218,7 @@ class AudioRecorder:
                 sd.check_input_settings(
                     device=target_device, channels=CHANNELS, samplerate=RATE
                 )
-            except:
+            except Exception:
                 rate_to_use = default_rate
 
             self.stream = sd.InputStream(
@@ -152,12 +228,19 @@ class AudioRecorder:
                 callback=callback,
             )
             self.stream.start()
+            if pulse_src and old_pulse is not None:
+                os.environ["PULSE_SOURCE"] = old_pulse
+            elif pulse_src:
+                os.environ.pop("PULSE_SOURCE", None)
             print(
                 f"[REC] Audio stream started on device {target_device} at {rate_to_use}Hz.",
                 flush=True,
             )
         except Exception as e:
-            print(f"Failed to start stream: {e}")
+            if pulse_src and old_pulse is not None:
+                os.environ["PULSE_SOURCE"] = old_pulse
+            elif pulse_src:
+                os.environ.pop("PULSE_SOURCE", None)
             raise e
 
     def stop(self):
@@ -182,16 +265,27 @@ class AudioRecorder:
 class VoiceDictationApp:
     def __init__(self):
         self.recorder = AudioRecorder()
+        self._lock = threading.Lock()
         self.is_recording = False
         self.is_running = False
         self.last_transcription = ""
         self.status = "Idle"
         self.hotkey_listener = None
+        self._streaming_worker_active = False
+        self._transcribe_semaphore = threading.BoundedSemaphore(3)
+        self._mic_test_active = False
+        self._mic_test_level = 0.0
+        self._mic_test_stream = None
+        self._mic_test_seq = 0
+        self.transcription_history = []
 
     def notify(self, title, message):
         print(f"[{title}] {message}", flush=True)
         self.status = f"{title}: {message}"
-        subprocess.run(["notify-send", "-a", "Voice Typing", title, message])
+        try:
+            subprocess.run(["notify-send", "-a", "Voice Typing", title, message])
+        except Exception:
+            pass
 
     def play_beep(self, frequency=800, duration=0.1):
         if not BEEP_ENABLED:
@@ -223,20 +317,27 @@ class VoiceDictationApp:
             return
         print(f"Injecting: '{text}'", flush=True)
         self.last_transcription = text
+        self.transcription_history.append({
+            "text": text,
+            "time": time.strftime("%H:%M:%S"),
+            "source": "streaming" if STREAMING_MODE else "batch",
+        })
+        if len(self.transcription_history) > 50:
+            self.transcription_history.pop(0)
         try:
             result = subprocess.run(
                 ["xdotool", "type", "--clearmodifiers", text], capture_output=True
             )
             if result.returncode == 0:
                 return
-        except:
+        except Exception:
             pass
         try:
             from pynput.keyboard import Controller
 
             Controller().type(text)
-        except:
-            pass
+        except Exception:
+            print("Warning: both xdotool and pynput failed to type text", flush=True)
 
     def update_config(
         self,
@@ -247,34 +348,47 @@ class VoiceDictationApp:
         device_index=None,
         silence_threshold=None,
         beep_enabled=None,
+        pulse_source=None,
     ):
         global STT_ENDPOINT, STT_MODEL, STREAMING_MODE, HOTKEY_STR
-        global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED
+        global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED, PULSE_SOURCE_NAME
 
         need_hotkey_restart = False
 
-        if stt_endpoint is not None:
-            STT_ENDPOINT = stt_endpoint
-        if stt_model is not None:
-            STT_MODEL = stt_model
-        if streaming is not None:
-            STREAMING_MODE = bool(streaming)
-        if beep_enabled is not None:
-            BEEP_ENABLED = bool(beep_enabled)
-        if silence_threshold is not None:
-            SILENCE_THRESHOLD = float(silence_threshold)
-        if device_index is not None:
-            try:
-                DEVICE_INDEX = int(device_index)
-                self.recorder.device_index = DEVICE_INDEX
-            except:
-                pass
+        with _config_lock:
+            if stt_endpoint is not None:
+                STT_ENDPOINT = stt_endpoint
+            if stt_model is not None:
+                STT_MODEL = stt_model
+            if streaming is not None:
+                STREAMING_MODE = bool(streaming)
+            if beep_enabled is not None:
+                BEEP_ENABLED = bool(beep_enabled)
+            if silence_threshold is not None and str(silence_threshold).strip():
+                SILENCE_THRESHOLD = float(silence_threshold)
+            if device_index is not None and str(device_index).strip():
+                try:
+                    di = int(device_index)
+                    if di < 0:
+                        print(f"Ignoring invalid device index: {di}", flush=True)
+                    else:
+                        DEVICE_INDEX = di
+                        self.recorder.device_index = DEVICE_INDEX
+                except Exception:
+                    pass
 
-        if hotkey is not None and hotkey != HOTKEY_STR:
-            HOTKEY_STR = hotkey
-            need_hotkey_restart = True
+            if hotkey is not None and hotkey != HOTKEY_STR:
+                HOTKEY_STR = hotkey
+                need_hotkey_restart = True
+
+            if pulse_source is not None:
+                PULSE_SOURCE_NAME = pulse_source.strip() or None
+                self.recorder.pulse_source_name = PULSE_SOURCE_NAME
 
         if need_hotkey_restart and self.is_running:
+            if self.is_recording:
+                print("Hotkey changed while recording — stopping first", flush=True)
+                self.toggle_recording()
             self.stop_service()
             self.start_service()
 
@@ -289,69 +403,80 @@ class VoiceDictationApp:
                 "DEVICE_INDEX": DEVICE_INDEX,
                 "HOTKEY_STR": HOTKEY_STR,
                 "SILENCE_DURATION": SILENCE_DURATION,
+                "PULSE_SOURCE_NAME": PULSE_SOURCE_NAME,
             }
         )
 
         self.notify("Config Updated", "Settings saved persistently")
 
     def toggle_recording(self):
-        if not self.is_recording:
-            self.is_recording = True
-            self.play_beep(800, 0.1)
-            self.notify("Recording", "Speak now...")
-            self.recorder.start(device_index=DEVICE_INDEX)
-            if STREAMING_MODE:
-                threading.Thread(target=self._streaming_worker, daemon=True).start()
-        else:
-            self.is_recording = False
-            self.play_beep(400, 0.1)
-            self.notify("Processing", "Finalizing...")
+        with self._lock:
+            if not self.is_recording:
+                self.is_recording = True
+                self.play_beep(800, 0.1)
+                self.notify("Recording", "Speak now...")
+                self.recorder.start(device_index=DEVICE_INDEX, pulse_source=PULSE_SOURCE_NAME)
+                if STREAMING_MODE:
+                    threading.Thread(target=self._streaming_worker, daemon=True).start()
+            else:
+                self.is_recording = False
+                self.play_beep(400, 0.1)
+                self.notify("Processing", "Finalizing...")
 
-            def process_stop():
-                try:
-                    audio_path = self.recorder.stop()
-                    if not STREAMING_MODE and audio_path:
-                        text = self.transcribe(audio_path)
-                        if text:
-                            self.type_text(text)
-                    self.status = "Idle"
-                except Exception as e:
-                    print(f"Stop error: {e}")
+                def process_stop():
+                    try:
+                        audio_path = self.recorder.stop()
+                        if not STREAMING_MODE and audio_path:
+                            text = self.transcribe(audio_path)
+                            if text:
+                                self.type_text(text)
+                        self.status = "Idle"
+                    except Exception as e:
+                        print(f"Stop error: {e}")
 
-            threading.Thread(target=process_stop, daemon=True).start()
+                threading.Thread(target=process_stop, daemon=True).start()
 
     def _streaming_worker(self):
-        utterance_buffer = []
-        silence_duration = 0.0
-        is_speaking = False
+        with self._lock:
+            if self._streaming_worker_active:
+                return
+            self._streaming_worker_active = True
 
-        while self.is_recording:
-            try:
-                chunk = self.recorder.stream_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
+        try:
+            utterance_buffer = []
+            silence_duration = 0.0
+            is_speaking = False
 
-            rms = np.sqrt(np.mean(chunk**2))
-            if rms > SILENCE_THRESHOLD:
-                is_speaking = True
-                silence_duration = 0.0
-            elif is_speaking:
-                silence_duration += len(chunk) / float(self.recorder.rate)
+            while self.is_recording:
+                try:
+                    chunk = self.recorder.stream_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
 
-            if is_speaking:
-                utterance_buffer.append(chunk)
-                if silence_duration > SILENCE_DURATION:
-                    audio_data = np.concatenate(utterance_buffer, axis=0)
-                    utterance_buffer = []
-                    is_speaking = False
+                rms = np.sqrt(np.mean(chunk**2))
+                if rms > SILENCE_THRESHOLD:
+                    is_speaking = True
                     silence_duration = 0.0
-                    if len(audio_data) / float(self.recorder.rate) > 0.4:
-                        self._process_stream_chunk(audio_data)
+                elif is_speaking:
+                    silence_duration += len(chunk) / float(self.recorder.rate)
 
-        if utterance_buffer:
-            audio_data = np.concatenate(utterance_buffer, axis=0)
-            if len(audio_data) / float(self.recorder.rate) > 0.4:
-                self._process_stream_chunk(audio_data)
+                if is_speaking:
+                    utterance_buffer.append(chunk)
+                    if silence_duration > SILENCE_DURATION:
+                        audio_data = np.concatenate(utterance_buffer, axis=0)
+                        utterance_buffer = []
+                        is_speaking = False
+                        silence_duration = 0.0
+                        if len(audio_data) / float(self.recorder.rate) > 0.4:
+                            self._process_stream_chunk(audio_data)
+
+            if utterance_buffer:
+                audio_data = np.concatenate(utterance_buffer, axis=0)
+                if len(audio_data) / float(self.recorder.rate) > 0.4:
+                    self._process_stream_chunk(audio_data)
+        finally:
+            with self._lock:
+                self._streaming_worker_active = False
 
     def _process_stream_chunk(self, audio_data):
         temp_file = f"/tmp/vds_{int(time.time() * 1000)}.wav"
@@ -364,15 +489,26 @@ class VoiceDictationApp:
                 self.type_text(text + " ")
             try:
                 os.remove(temp_file)
-            except:
+            except Exception:
                 pass
 
-        threading.Thread(target=run_trans, daemon=True).start()
+        if not self._transcribe_semaphore.acquire(blocking=False):
+            print("Warning: too many pending transcriptions, dropping chunk", flush=True)
+            return
+
+        def run_with_release():
+            try:
+                run_trans()
+            finally:
+                self._transcribe_semaphore.release()
+
+        threading.Thread(target=run_with_release, daemon=True).start()
 
     def start_service(self):
-        if self.is_running:
-            return
-        self.is_running = True
+        with self._lock:
+            if self.is_running:
+                return
+            self.is_running = True
 
         def listen():
             with keyboard.GlobalHotKeys({HOTKEY_STR: self.toggle_recording}) as h:
@@ -383,14 +519,144 @@ class VoiceDictationApp:
         self.notify("Service", "Daemon Started")
 
     def stop_service(self):
-        if not self.is_running:
-            return
-        if self.hotkey_listener:
-            self.hotkey_listener.stop()
-        self.is_running = False
-        self.is_recording = False
+        with self._lock:
+            if not self.is_running:
+                return
+            if self.hotkey_listener:
+                self.hotkey_listener.stop()
+            self.is_running = False
+            self.is_recording = False
         self.recorder.stop()
         self.notify("Service", "Daemon Stopped")
+
+    def start_mic_test(self):
+        if self._mic_test_stream is not None:
+            self.stop_mic_test()
+
+        target_device = DEVICE_INDEX if DEVICE_INDEX is not None else self.recorder.device_index
+        try:
+            target_device = int(target_device)
+        except (ValueError, TypeError):
+            pass
+
+        pulse_src = PULSE_SOURCE_NAME or self.recorder.pulse_source_name
+        old_pulse = os.environ.get("PULSE_SOURCE")
+        if pulse_src:
+            os.environ["PULSE_SOURCE"] = pulse_src
+
+        device_info = sd.query_devices(target_device, "input")
+        default_rate = int(device_info["default_samplerate"])
+        rate_to_use = RATE
+        try:
+            sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
+        except Exception:
+            rate_to_use = default_rate
+
+        self._mic_test_level = 0.0
+        self._mic_test_active = True
+        self._mic_test_seq += 1
+        seq = self._mic_test_seq
+
+        def callback(indata, frames, time_val, status):
+            if status:
+                print(f"Mic test status: {status}", flush=True)
+            rms = np.sqrt(np.mean(indata**2))
+            self._mic_test_level = min(1.0, rms * 20)
+
+        self._mic_test_stream = sd.InputStream(
+            samplerate=rate_to_use,
+            device=target_device,
+            channels=CHANNELS,
+            callback=callback,
+        )
+        self._mic_test_stream.start()
+
+        if pulse_src and old_pulse is not None:
+            os.environ["PULSE_SOURCE"] = old_pulse
+        elif pulse_src:
+            os.environ.pop("PULSE_SOURCE", None)
+
+        def auto_stop():
+            time.sleep(5)
+            if self._mic_test_seq == seq:
+                self.stop_mic_test()
+
+        threading.Thread(target=auto_stop, daemon=True).start()
+
+    def stop_mic_test(self):
+        if not self._mic_test_active:
+            return
+        self._mic_test_active = False
+        if self._mic_test_stream:
+            try:
+                self._mic_test_stream.stop()
+                self._mic_test_stream.close()
+            except Exception:
+                pass
+            self._mic_test_stream = None
+
+    def get_mic_test_level(self):
+        return float(self._mic_test_level)
+
+    def test_stt_endpoint(self):
+        pulse_src = None
+        old_pulse = None
+        try:
+            sample_rate = 16000
+            duration = 2.0
+
+            target_device = DEVICE_INDEX if DEVICE_INDEX is not None else self.recorder.device_index
+            try:
+                target_device = int(target_device)
+            except (ValueError, TypeError):
+                pass
+
+            pulse_src = PULSE_SOURCE_NAME or self.recorder.pulse_source_name
+            old_pulse = os.environ.get("PULSE_SOURCE")
+            if pulse_src:
+                os.environ["PULSE_SOURCE"] = pulse_src
+
+            recording = sd.rec(
+                int(sample_rate * duration), samplerate=sample_rate,
+                device=target_device, channels=1,
+            )
+            sd.wait()
+
+            if pulse_src and old_pulse is not None:
+                os.environ["PULSE_SOURCE"] = old_pulse
+            elif pulse_src:
+                os.environ.pop("PULSE_SOURCE", None)
+
+            test_file = "/tmp/vds_stt_test.wav"
+            wav.write(test_file, sample_rate, recording)
+
+            start = time.time()
+            with open(test_file, "rb") as f:
+                files = {"file": ("stt_test.wav", f, "audio/wav")}
+                data = {"model": STT_MODEL}
+                resp = requests.post(STT_ENDPOINT, files=files, data=data, timeout=30)
+                elapsed = time.time() - start
+                resp.raise_for_status()
+                result_text = resp.json().get("text", "").strip()
+
+            return {
+                "success": True,
+                "text": result_text or "(empty — no speech detected)",
+                "model": STT_MODEL,
+                "endpoint": STT_ENDPOINT,
+                "elapsed": round(elapsed, 2),
+            }
+        except Exception as e:
+            if pulse_src and old_pulse is not None:
+                os.environ["PULSE_SOURCE"] = old_pulse
+            elif pulse_src:
+                os.environ.pop("PULSE_SOURCE", None)
+            return {
+                "success": False,
+                "error": str(e),
+                "endpoint": STT_ENDPOINT,
+                "model": STT_MODEL,
+            }
 
 
 if __name__ == "__main__":

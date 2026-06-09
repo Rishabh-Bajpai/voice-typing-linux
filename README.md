@@ -58,19 +58,48 @@ Configure via environment variables in `.env`:
 
 ## Running on Startup (Ubuntu)
 
+### Option 1: Startup Applications (easiest)
+
 1. Make the launcher executable:
    ```bash
    chmod +x run_app.sh
    ```
 
-2. Edit `run_app.sh` and set:
-   - `CONDA_PATH` — e.g., `/home/<your-user>/miniconda3`
-   - `ENV_NAME` — e.g., `voiceTyping`
-
-3. Open **Startup Applications** in Ubuntu and add a new entry:
+2. Open **Startup Applications** in Ubuntu and add a new entry:
    - **Name:** `Voice Typing UI`
    - **Command:** `/absolute/path/to/voice_typing/run_app.sh`
-   - **Comment:** Optional
+   - **Comment:** Starts the Voice Typing web UI and hotkey service
+
+The `run_app.sh` script auto-detects conda and your active environment.
+
+### Option 2: systemd user service (more robust)
+
+Create `~/.config/systemd/user/voice-typing.service`:
+
+```ini
+[Unit]
+Description=Voice Typing UI Service
+After=network.target sound.target
+
+[Service]
+Type=simple
+ExecStart=%h/path/to/voice_typing/run_app.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+Then enable and start it:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now voice-typing.service
+systemctl --user status voice-typing.service
+```
+
+This will start the app on boot, restart if it crashes, and you can check logs with `journalctl --user -u voice-typing.service`.
 
 ## Troubleshooting
 

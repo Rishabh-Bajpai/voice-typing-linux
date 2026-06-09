@@ -1,0 +1,12 @@
+[Unit]
+Description=Voice Typing UI Service
+After=network.target sound.target
+
+[Service]
+Type=simple
+ExecStart=%h/projects/voice_typing/run_app.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

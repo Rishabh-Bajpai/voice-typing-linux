@@ -5,7 +5,12 @@ import voice_dictation
 from voice_dictation import VoiceDictationApp
 
 app = Flask(__name__)
-CORS(app, origins=["http://127.0.0.1:3221", "http://localhost:3221"])
+_ui_port = int(os.getenv("VOICE_TYPING_UI_PORT", "3221"))
+_ui_host = os.getenv("VOICE_TYPING_UI_HOST", "127.0.0.1")
+_cors_origins = [f"http://127.0.0.1:{_ui_port}", f"http://localhost:{_ui_port}"]
+if _ui_host not in ("127.0.0.1", "localhost"):
+    _cors_origins.append(f"http://{_ui_host}:{_ui_port}")
+CORS(app, origins=_cors_origins)
 
 # Initialize the dictation app
 dict_app = VoiceDictationApp()
@@ -950,7 +955,4 @@ def test_stt():
 
 if __name__ == "__main__":
     dict_app.start_service()
-    app.run(
-        host=os.getenv("VOICE_TYPING_UI_HOST", "127.0.0.1"),
-        port=int(os.getenv("VOICE_TYPING_UI_PORT", "3221")),
-    )
+    app.run(host=_ui_host, port=_ui_port)

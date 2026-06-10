@@ -2,58 +2,74 @@
 
 ## Quick Start
 ```bash
-cp .env.example .env  # Required — not git-tracked
-conda activate voiceTyping  # or your venv of choice
-python app.py
+cp .env.example .env
+conda activate voiceTyping
+python app.py          # served at http://127.0.0.1:3221
 ```
 
 ## Key Commands
-- **Run app**: `python app.py` (starts Flask UI + hotkey service)
-- **Run tests**: `PYTHONPATH=. pytest -q`
+- **Run**: `python app.py` (Flask + hotkey daemon + system tray subprocess)
+- **Tests**: `PYTHONPATH=. pytest -q` (33 tests, all mocking hardware/network)
 - **Lint**: `ruff check .`
+- **Single test**: `PYTHONPATH=. pytest tests/test_voice_edge_cases.py::test_name -q`
 
 ## Architecture
-- `app.py` — Flask web server (UI + API), ~700-line embedded HTML template
-- `voice_dictation.py` — Core: `AudioRecorder`, `VoiceDictationApp` classes
-- `config.json` — Persisted settings (auto-created on first save, gitignored)
-- `.env` — Environment variable overrides (gitignored)
-- `tests/` — Pytest suite with mocked audio/network/hardware
-
-## Dependencies
-Install in a fresh environment:
-```bash
-conda create -n voiceTyping python=3.11
-conda activate voiceTyping
-pip install flask flask-cors requests sounddevice scipy numpy pynput
-```
+- `app.py` (~1150 lines) — Flask server with embedded HTML template + all JS/CSS
+- `voice_dictation.py` (~880 lines) — `AudioRecorder` + `VoiceDictationApp` classes
+- `llm_client.py` — OpenAI-compatible LLM post-processor (grammar/translate/custom)
+- `tray.py` — System tray via `/usr/bin/python3` + `gi.repository.AyatanaAppIndicator3`
+- `config.json` — Runtime settings (auto-created, gitignored)
+- `.env` — Environment variables (gitignored), loaded at module level before Flask starts
+- `tests/` — Pytest, mocks sounddevice/scipy/pynput via `conftest.py`
 
 ## Critical Details
-- **STT endpoint**: Must be OpenAI-compatible (`/v1/audio/transcriptions` with `model` form field)
-- **Hotkey format**: Uses `pynput` format, e.g., `<cmd>+<shift>+s` (not standard key names)
-- **Audio storage**: Writes to `/tmp/voice_typing.wav` and `/tmp/vds_*.wav`
-- **Typing**: Falls back from `xdotool` → `pynput.keyboard.Controller().type()` if xdotool unavailable
-- **PulseAudio-only devices**: Routed via `PULSE_SOURCE` env var — set `VOICE_TYPING_PULSE_SOURCE` in `.env`
-- **Wayland**: No native `xdotool` support; requires `ydotool` for key injection
 
-## Device Listing
-Uses `pactl list sources` for user-friendly device names, mapped to `sounddevice` ALSA indices.
-Devices not directly accessible via ALSA are routed through PulseAudio (index 9 + `PULSE_SOURCE`).
+### Dependencies — two environments needed
+- **App runtime** (conda `voiceTyping`): `flask flask-cors requests sounddevice scipy numpy pynput pyperclip pystray Pillow`
+- **System tray** (system `/usr/bin/python3`): requires `python3-gi`, `gir1.2-ayatanaappindicator3-0.1` via apt — conda's pygobject lacks GI introspection data
 
-## Mic Test
-- 5-second test recording with real-time 12-bar VU meter + dBFS readout
-- Uses `sounddevice.InputStream` callback to compute RMS → normalized level (0.0–1.0)
+### Hotkey
+- Uses `pynput.keyboard.GlobalHotKeys` for press detection, separate `keyboard.Listener` for push-to-hold release detection
+- Format: `<cmd>+<shift>+s` (pynput syntax, not standard key names)
+- On logout/login the X11 connection dies — use `POST /restart_hotkey` or the ⌨️ Reset button in the web UI
+- `pkill -f` hangs; use `timeout 3 kill <PID>` instead
 
-## STT Test
-- 2-second recording from the selected mic, sent to the configured STT endpoint
-- Displays endpoint, model, elapsed time, and transcribed result in the UI
+### Audio
+- Records at 16000 Hz if the device supports it, otherwise uses the device's default sample rate
+- PulseAudio-only devices (sounddevice can't see them) route through index 9 + `PULSE_SOURCE` env var
+- Temp files: `/tmp/voice_typing.wav`, `/tmp/vds_*.wav`
 
-## Tests
-- `PYTHONPATH=. pytest -q` — 33 tests, all mocking hardware/network
-- Test helper `ImmediateThread` runs threaded code synchronously (`**kwargs` compatible)
-- Coverage config in `.github/workflows/tests.yml`
+### Config priority
+1. `.env` file loaded into `os.environ` at module level
+2. `config.json` overlays runtime overrides
+3. LLM credentials (`OPENAI_*`) come from `.env` only — excluded from `config.json`
 
-## Common Issues
-- "Endpoint unreachable" — STT server not running on port 8969 or wrong URL
-- Hotkey conflicts — Desktop environment uses same shortcut
-- Microphone not detected — Use web UI to select device index manually
-- USB/PulseAudio-only devices not in sounddevice list — They appear with `pulse_source` and route through the "default" PulseAudio device
+### Typing
+- Falls back: `xdotool type --clearmodifiers` → `pynput.keyboard.Controller().type()` → printed warning
+- Clipboard fallback: `pyperclip` → `xclip -selection clipboard`
+- Wayland: xdotool/pynput don't work; requires `ydotool`
+
+### Sample rate gotcha
+- PulseAudio's "default" ALSA device (index 9) may not support 16000 Hz
+- `check_input_settings` can lie about support — always use the device's `default_samplerate` as first choice
+- All three recording paths (`AudioRecorder.start`, `start_mic_test`, `test_stt_endpoint`) must respect this
+
+### System tray
+- `pystray` uses X11 System Tray protocol (incompatible with GNOME AppIndicator)
+- Must use `gi.repository.AyatanaAppIndicator3` via system Python with explicit `DISPLAY` + `DBUS_SESSION_BUS_ADDRESS`
+- GNOME requires `gnome-shell-extension-ubuntu-appindicators` enabled
+
+## Test quirks
+- `conftest.py` mocks sounddevice, scipy, pynput at module level via `sys.modules` injection
+- `ImmediateThread` replaces `threading.Thread` — runs target synchronously in `.start()`
+- Must accept `**kwargs` because `concurrent.futures` (or other libs) pass extra args
+- Tests patch `vd.subprocess`, `vd.sd`, etc. (module-level references, not global)
+
+## Key files (agent should read first)
+| File | Purpose |
+|------|---------|
+| `app.py` | All routes + embedded HTML template + JS |
+| `voice_dictation.py` | Core logic, state machine, audio pipeline |
+| `conftest.py` | Mock setup — essential for understanding test behavior |
+| `tray.py` | System tray (runs as separate process via system Python) |
+| `.env.example` | All configurable variables documented |

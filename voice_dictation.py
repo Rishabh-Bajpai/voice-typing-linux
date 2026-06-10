@@ -59,26 +59,9 @@ def load_config():
         try:
             with open(CONFIG_FILE, "r") as f:
                 loaded = json.load(f)
-            # Env vars take priority over config.json
-            _env_prefixes = {
-                "STT_ENDPOINT": "VOICE_TYPING_STT_ENDPOINT",
-                "STT_MODEL": "VOICE_TYPING_STT_MODEL",
-                "STREAMING_MODE": "VOICE_TYPING_STREAMING",
-                "SILENCE_THRESHOLD": "VOICE_TYPING_SILENCE_THRESHOLD",
-                "SILENCE_DURATION": "VOICE_TYPING_SILENCE_DURATION",
-                "BEEP_ENABLED": "VOICE_TYPING_BEEP",
-                "HOTKEY_STR": "VOICE_TYPING_HOTKEY",
-                "PULSE_SOURCE_NAME": "VOICE_TYPING_PULSE_SOURCE",
-                "OPENAI_BASE_URL": "OPENAI_BASE_URL",
-                "OPENAI_CHAT_MODEL_ID": "OPENAI_CHAT_MODEL_ID",
-                "OPENAI_API_KEY": "OPENAI_API_KEY",
-            }
-            for k, env_key in _env_prefixes.items():
-                env_val = os.getenv(env_key)
-                if env_val is not None and env_val.strip():
-                    # Keep the env value, don't let config.json override
-                    if k in loaded:
-                        del loaded[k]
+            # LLM credentials should NOT come from config.json (they're secrets)
+            for _k in ("OPENAI_BASE_URL", "OPENAI_CHAT_MODEL_ID", "OPENAI_API_KEY"):
+                loaded.pop(_k, None)
             defaults.update(loaded)
         except Exception as e:
             print(f"Error loading config: {e}")
@@ -255,13 +238,12 @@ class AudioRecorder:
             # Re-check rate if device changed
             device_info = sd.query_devices(target_device, "input")
             default_rate = int(device_info["default_samplerate"])
-            rate_to_use = RATE
+            rate_to_use = default_rate
             try:
-                sd.check_input_settings(
-                    device=target_device, channels=CHANNELS, samplerate=RATE
-                )
+                sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
+                rate_to_use = RATE
             except Exception:
-                rate_to_use = default_rate
+                pass
 
             self.stream = sd.InputStream(
                 samplerate=rate_to_use,
@@ -388,8 +370,14 @@ class VoiceDictationApp:
             import pyperclip
             pyperclip.copy(text)
             print(f"[CLIP] Copied to clipboard: '{text}'", flush=True)
+            return
         except Exception as e:
-            print(f"[CLIP] Error: {e}", flush=True)
+            print(f"[CLIP] pyperclip failed: {e}", flush=True)
+        try:
+            subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, timeout=3)
+            print(f"[CLIP] Copied via xclip: '{text}'", flush=True)
+        except Exception as e:
+            print(f"[CLIP] xclip also failed: {e}", flush=True)
 
     def process_and_output(self, text):
         if not text:
@@ -453,17 +441,20 @@ class VoiceDictationApp:
             self.transcription_history.pop(0)
         try:
             result = subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", text], capture_output=True
+                ["xdotool", "type", "--clearmodifiers", text], capture_output=True, timeout=3
             )
             if result.returncode == 0:
+                print(f"[TYPE] Typed via xdotool: '{text[:50]}'", flush=True)
                 return
-        except Exception:
-            pass
+            print(f"[TYPE] xdotool failed (code {result.returncode}): {result.stderr.decode()[:100]}", flush=True)
+        except Exception as e:
+            print(f"[TYPE] xdotool error: {e}", flush=True)
         try:
             from pynput.keyboard import Controller
-
             Controller().type(text)
-        except Exception:
+            print(f"[TYPE] Typed via pynput: '{text[:50]}'", flush=True)
+        except Exception as e:
+            print(f"[TYPE] pynput also failed: {e}", flush=True)
             print("Warning: both xdotool and pynput failed to type text", flush=True)
 
     def update_config(
@@ -671,6 +662,13 @@ class VoiceDictationApp:
         self.notify("Service", "Daemon Started")
 
     def _start_hotkey_listener(self):
+        parts = [p.strip("<>") for p in HOTKEY_STR.split("+")]
+        main_key = None
+        for p in parts:
+            if p not in ("ctrl", "cmd", "alt", "shift"):
+                main_key = p
+                break
+
         def listen():
             try:
                 with keyboard.GlobalHotKeys({HOTKEY_STR: self._on_hotkey}) as h:
@@ -679,37 +677,31 @@ class VoiceDictationApp:
             except Exception:
                 pass
 
+        if main_key:
+            main_key_lower = main_key.lower()
+            def release_listen():
+                def on_release(key):
+                    if (self.push_to_hold and self.is_recording
+                            and hasattr(key, "char")
+                            and key.char is not None
+                            and key.char.lower() == main_key_lower):
+                        self._push_to_hold_stop()
+                try:
+                    with keyboard.Listener(on_release=on_release) as lst:
+                        self._release_listener = lst
+                        lst.join()
+                except Exception:
+                    pass
+            threading.Thread(target=release_listen, daemon=True).start()
+
         threading.Thread(target=listen, daemon=True).start()
 
     def _on_hotkey(self):
         if self.push_to_hold:
             if not self.is_recording:
                 self._push_to_hold_start()
-                threading.Thread(target=self._wait_for_release, daemon=True).start()
         else:
             self.toggle_recording()
-
-    def _wait_for_release(self):
-        parts = [p.strip("<>") for p in HOTKEY_STR.split("+")]
-        main_key = None
-        for p in parts:
-            if p not in ("ctrl", "cmd", "alt", "shift"):
-                main_key = p
-                break
-        if main_key is None:
-            return
-
-        released = threading.Event()
-
-        def on_release(key):
-            if hasattr(key, "char") and key.char == main_key:
-                released.set()
-
-        listener = keyboard.Listener(on_release=on_release)
-        listener.start()
-        released.wait()
-        listener.stop()
-        self._push_to_hold_stop()
 
     def stop_service(self):
         with self._lock:
@@ -717,6 +709,8 @@ class VoiceDictationApp:
                 return
             if self.hotkey_listener:
                 self.hotkey_listener.stop()
+            if self._release_listener:
+                self._release_listener.stop()
             self.is_running = False
             self.is_recording = False
         self.recorder.stop()
@@ -729,6 +723,12 @@ class VoiceDictationApp:
             except Exception:
                 pass
             self.hotkey_listener = None
+        if self._release_listener:
+            try:
+                self._release_listener.stop()
+            except Exception:
+                pass
+            self._release_listener = None
         self._start_hotkey_listener()
         print("[HOTKEY] Restarted", flush=True)
 
@@ -749,11 +749,12 @@ class VoiceDictationApp:
 
         device_info = sd.query_devices(target_device, "input")
         default_rate = int(device_info["default_samplerate"])
-        rate_to_use = RATE
+        rate_to_use = default_rate
         try:
             sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
+            rate_to_use = RATE
         except Exception:
-            rate_to_use = default_rate
+            pass
 
         self._mic_test_level = 0.0
         self._mic_test_active = True
@@ -805,7 +806,6 @@ class VoiceDictationApp:
         pulse_src = None
         old_pulse = None
         try:
-            sample_rate = 16000
             duration = 2.0
 
             target_device = DEVICE_INDEX if DEVICE_INDEX is not None else self.recorder.device_index
@@ -819,8 +819,18 @@ class VoiceDictationApp:
             if pulse_src:
                 os.environ["PULSE_SOURCE"] = pulse_src
 
+            device_info = sd.query_devices(target_device, "input")
+            default_rate = int(device_info["default_samplerate"])
+            rate_to_use = default_rate
+            # Only try 16000 if the device explicitly supports it
+            try:
+                sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
+                rate_to_use = RATE
+            except Exception:
+                pass
+
             recording = sd.rec(
-                int(sample_rate * duration), samplerate=sample_rate,
+                int(rate_to_use * duration), samplerate=rate_to_use,
                 device=target_device, channels=1,
             )
             sd.wait()
@@ -831,7 +841,7 @@ class VoiceDictationApp:
                 os.environ.pop("PULSE_SOURCE", None)
 
             test_file = "/tmp/vds_stt_test.wav"
-            wav.write(test_file, sample_rate, recording)
+            wav.write(test_file, rate_to_use, recording)
 
             start = time.time()
             with open(test_file, "rb") as f:

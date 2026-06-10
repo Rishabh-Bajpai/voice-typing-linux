@@ -1,4 +1,5 @@
 import json
+import os
 
 
 def test_load_config_reads_voice_typing_env(vd, monkeypatch):
@@ -26,6 +27,11 @@ def test_load_config_reads_voice_typing_env(vd, monkeypatch):
 
 
 def test_load_config_merges_config_file(vd, tmp_path, monkeypatch):
+    # Clear env vars that may have been loaded from .env file
+    for k in list(os.environ.keys()):
+        if k.startswith("VOICE_TYPING_") or k.startswith("OPENAI_"):
+            monkeypatch.delenv(k, raising=False)
+
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(
         json.dumps(

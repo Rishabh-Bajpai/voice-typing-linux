@@ -11,6 +11,20 @@ from pynput import keyboard
 import subprocess
 import queue
 
+from llm_client import llm_process
+
+# Load .env file manually (before Flask does it, since module-level code runs first)
+_env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+if os.path.exists(_env_path):
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                _k, _v = _k.strip(), _v.strip().strip("'\"")
+                if not os.environ.get(_k):  # Don't override existing env vars
+                    os.environ[_k] = _v
+
 
 CHANNELS = 1
 RATE = 16000
@@ -27,7 +41,7 @@ def load_config():
             "VOICE_TYPING_STT_MODEL", "Systran/faster-whisper-medium.en"
         ),
         "DEVICE_INDEX": os.getenv("VOICE_TYPING_DEVICE_INDEX", None),
-        "STREAMING_MODE": os.getenv("VOICE_TYPING_STREAMING", "1") == "1",
+        "STREAMING_MODE": os.getenv("VOICE_TYPING_STREAMING", "0") == "1",
         "SILENCE_THRESHOLD": float(
             os.getenv("VOICE_TYPING_SILENCE_THRESHOLD", "0.015")
         ),
@@ -35,12 +49,37 @@ def load_config():
         "BEEP_ENABLED": os.getenv("VOICE_TYPING_BEEP", "1") == "1",
         "HOTKEY_STR": os.getenv("VOICE_TYPING_HOTKEY", "<cmd>+<shift>+s"),
         "PULSE_SOURCE_NAME": os.getenv("VOICE_TYPING_PULSE_SOURCE", None),
+        "OPENAI_BASE_URL": os.getenv("OPENAI_BASE_URL", ""),
+        "OPENAI_CHAT_MODEL_ID": os.getenv("OPENAI_CHAT_MODEL_ID", ""),
+        "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
+        "LLM_ACTION": "off",
+        "LLM_INSTRUCTION": "",
     }
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
                 loaded = json.load(f)
-                defaults.update(loaded)
+            # Env vars take priority over config.json
+            _env_prefixes = {
+                "STT_ENDPOINT": "VOICE_TYPING_STT_ENDPOINT",
+                "STT_MODEL": "VOICE_TYPING_STT_MODEL",
+                "STREAMING_MODE": "VOICE_TYPING_STREAMING",
+                "SILENCE_THRESHOLD": "VOICE_TYPING_SILENCE_THRESHOLD",
+                "SILENCE_DURATION": "VOICE_TYPING_SILENCE_DURATION",
+                "BEEP_ENABLED": "VOICE_TYPING_BEEP",
+                "HOTKEY_STR": "VOICE_TYPING_HOTKEY",
+                "PULSE_SOURCE_NAME": "VOICE_TYPING_PULSE_SOURCE",
+                "OPENAI_BASE_URL": "OPENAI_BASE_URL",
+                "OPENAI_CHAT_MODEL_ID": "OPENAI_CHAT_MODEL_ID",
+                "OPENAI_API_KEY": "OPENAI_API_KEY",
+            }
+            for k, env_key in _env_prefixes.items():
+                env_val = os.getenv(env_key)
+                if env_val is not None and env_val.strip():
+                    # Keep the env value, don't let config.json override
+                    if k in loaded:
+                        del loaded[k]
+            defaults.update(loaded)
         except Exception as e:
             print(f"Error loading config: {e}")
     return defaults
@@ -65,6 +104,9 @@ SILENCE_DURATION = CONFIG["SILENCE_DURATION"]
 BEEP_ENABLED = CONFIG["BEEP_ENABLED"]
 HOTKEY_STR = CONFIG["HOTKEY_STR"]
 PULSE_SOURCE_NAME = CONFIG["PULSE_SOURCE_NAME"]
+OPENAI_BASE_URL = CONFIG["OPENAI_BASE_URL"]
+OPENAI_CHAT_MODEL_ID = CONFIG["OPENAI_CHAT_MODEL_ID"]
+OPENAI_API_KEY = CONFIG["OPENAI_API_KEY"]
 
 _config_lock = threading.Lock()
 
@@ -278,6 +320,11 @@ class VoiceDictationApp:
         self._mic_test_stream = None
         self._mic_test_seq = 0
         self.transcription_history = []
+        self.llm_action = "off"
+        self.llm_instruction = ""
+        self.push_to_hold = False
+        self.clipboard_mode = True
+        self._hotkey_pressed = False
 
     def notify(self, title, message):
         print(f"[{title}] {message}", flush=True)
@@ -311,6 +358,86 @@ class VoiceDictationApp:
         except Exception as e:
             print(f"Transcription error: {e}")
             return None
+
+    def _process_voice_commands(self, text):
+        commands = {
+            "new line": "\n",
+            "newline": "\n",
+            "new paragraph": "\n\n",
+            "period": ".",
+            "comma": ",",
+            "question mark": "?",
+            "exclamation mark": "!",
+            "colon": ":",
+            "semicolon": ";",
+            "open quote": "\u201c",
+            "close quote": "\u201d",
+            "open parenthesis": "(",
+            "close parenthesis": ")",
+            "tab": "\t",
+            "delete last word": "__DELETE_LAST_WORD__",
+            "delete last sentence": "__DELETE_LAST_SENTENCE__",
+        }
+        lower = text.lower().strip()
+        if lower in commands:
+            return commands[lower]
+        return text
+
+    def copy_to_clipboard(self, text):
+        try:
+            import pyperclip
+            pyperclip.copy(text)
+            print(f"[CLIP] Copied to clipboard: '{text}'", flush=True)
+        except Exception as e:
+            print(f"[CLIP] Error: {e}", flush=True)
+
+    def process_and_output(self, text):
+        if not text:
+            return
+
+        cmd = self._process_voice_commands(text)
+        if cmd == "__DELETE_LAST_WORD__":
+            for _ in range(4):
+                subprocess.run(["xdotool", "key", "BackSpace"], capture_output=True)
+                try:
+                    from pynput.keyboard import Controller, Key
+                    Controller().press(Key.backspace)
+                    Controller().release(Key.backspace)
+                except Exception:
+                    pass
+            return
+        if cmd == "__DELETE_LAST_SENTENCE__":
+            for _ in range(20):
+                subprocess.run(["xdotool", "key", "BackSpace"], capture_output=True)
+                try:
+                    from pynput.keyboard import Controller, Key
+                    Controller().press(Key.backspace)
+                    Controller().release(Key.backspace)
+                except Exception:
+                    pass
+            return
+        if cmd in ("\n", "\n\n"):
+            pass  # fall through to type
+
+        if not STREAMING_MODE and self.llm_action != "off":
+            processed = llm_process(cmd or text, self.llm_action, self.llm_instruction)
+        else:
+            processed = cmd or text
+
+        self.last_transcription = processed
+        self.transcription_history.append({
+            "text": processed,
+            "time": time.strftime("%H:%M:%S"),
+            "source": "llm" if (not STREAMING_MODE and self.llm_action != "off") else ("streaming" if STREAMING_MODE else "batch"),
+        })
+        if len(self.transcription_history) > 50:
+            self.transcription_history.pop(0)
+
+        print(f"Output: '{processed}'", flush=True)
+        if self.clipboard_mode:
+            self.type_text(processed)
+        else:
+            self.copy_to_clipboard(processed)
 
     def type_text(self, text):
         if not text:
@@ -428,13 +555,43 @@ class VoiceDictationApp:
                         audio_path = self.recorder.stop()
                         if not STREAMING_MODE and audio_path:
                             text = self.transcribe(audio_path)
-                            if text:
-                                self.type_text(text)
+                            self.process_and_output(text)
                         self.status = "Idle"
                     except Exception as e:
                         print(f"Stop error: {e}")
 
                 threading.Thread(target=process_stop, daemon=True).start()
+
+    def _push_to_hold_start(self):
+        with self._lock:
+            if self.is_recording:
+                return
+            self.is_recording = True
+        self.play_beep(800, 0.1)
+        self.notify("Recording", "Speak now...")
+        self.recorder.start(device_index=DEVICE_INDEX, pulse_source=PULSE_SOURCE_NAME)
+        if STREAMING_MODE:
+            threading.Thread(target=self._streaming_worker, daemon=True).start()
+
+    def _push_to_hold_stop(self):
+        with self._lock:
+            if not self.is_recording:
+                return
+            self.is_recording = False
+        self.play_beep(400, 0.1)
+        self.notify("Processing", "Finalizing...")
+
+        def process_stop():
+            try:
+                audio_path = self.recorder.stop()
+                if not STREAMING_MODE and audio_path:
+                    text = self.transcribe(audio_path)
+                    self.process_and_output(text)
+                self.status = "Idle"
+            except Exception as e:
+                print(f"Stop error: {e}")
+
+        threading.Thread(target=process_stop, daemon=True).start()
 
     def _streaming_worker(self):
         with self._lock:
@@ -510,13 +667,49 @@ class VoiceDictationApp:
                 return
             self.is_running = True
 
+        self._start_hotkey_listener()
+        self.notify("Service", "Daemon Started")
+
+    def _start_hotkey_listener(self):
         def listen():
-            with keyboard.GlobalHotKeys({HOTKEY_STR: self.toggle_recording}) as h:
-                self.hotkey_listener = h
-                h.join()
+            try:
+                with keyboard.GlobalHotKeys({HOTKEY_STR: self._on_hotkey}) as h:
+                    self.hotkey_listener = h
+                    h.join()
+            except Exception:
+                pass
 
         threading.Thread(target=listen, daemon=True).start()
-        self.notify("Service", "Daemon Started")
+
+    def _on_hotkey(self):
+        if self.push_to_hold:
+            if not self.is_recording:
+                self._push_to_hold_start()
+                threading.Thread(target=self._wait_for_release, daemon=True).start()
+        else:
+            self.toggle_recording()
+
+    def _wait_for_release(self):
+        parts = [p.strip("<>") for p in HOTKEY_STR.split("+")]
+        main_key = None
+        for p in parts:
+            if p not in ("ctrl", "cmd", "alt", "shift"):
+                main_key = p
+                break
+        if main_key is None:
+            return
+
+        released = threading.Event()
+
+        def on_release(key):
+            if hasattr(key, "char") and key.char == main_key:
+                released.set()
+
+        listener = keyboard.Listener(on_release=on_release)
+        listener.start()
+        released.wait()
+        listener.stop()
+        self._push_to_hold_stop()
 
     def stop_service(self):
         with self._lock:
@@ -528,6 +721,16 @@ class VoiceDictationApp:
             self.is_recording = False
         self.recorder.stop()
         self.notify("Service", "Daemon Stopped")
+
+    def restart_hotkey(self):
+        if self.hotkey_listener:
+            try:
+                self.hotkey_listener.stop()
+            except Exception:
+                pass
+            self.hotkey_listener = None
+        self._start_hotkey_listener()
+        print("[HOTKEY] Restarted", flush=True)
 
     def start_mic_test(self):
         if self._mic_test_stream is not None:

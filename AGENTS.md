@@ -58,6 +58,22 @@ python app.py          # served at http://127.0.0.1:3221
 - `pystray` uses X11 System Tray protocol (incompatible with GNOME AppIndicator)
 - Must use `gi.repository.AyatanaAppIndicator3` via system Python with explicit `DISPLAY` + `DBUS_SESSION_BUS_ADDRESS`
 - GNOME requires `gnome-shell-extension-ubuntu-appindicators` enabled
+- Full tray menu: mode (Toggle/Push-to-Hold), output (Type/Clipboard), LLM submenu (Off/Grammar/Translate with languages/Custom), Reconnect Hotkey, Open Web UI, Quit
+- Polls `/llm_config` every 2s to sync menu checkmarks via `GLib.idle_add`
+
+### Push-to-hold safety net
+- Release detection via pynput Listener is unreliable (XRecord interference with GlobalHotKeys)
+- `_push_to_hold_start()` creates a `threading.Timer(5.0)` as fallback — auto-stops recording if release not detected
+- Timer is cancelled in `_push_to_hold_stop()` if release fires normally
+
+### Voice commands
+- Punctuation/newline commands (`.` `,` `?` `\n` etc.) **skip LLM processing** to avoid corruption
+- Delete commands use xdotool OR pynput (not both) — previously doubled the deletion
+- `_backspace(count)` helper tries xdotool first, falls back to pynput
+
+### History
+- `type_text()` does NOT append to `transcription_history` (prevents duplicates when called from `process_and_output`)
+- Streaming history is added in `_process_stream_chunk()`; batch history in `process_and_output()`
 
 ## Test quirks
 - `conftest.py` mocks sounddevice, scipy, pynput at module level via `sys.modules` injection

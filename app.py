@@ -587,10 +587,10 @@ HTML_TEMPLATE = """
 
                 <div class="input-group full-width" style="grid-column:span 2;display:flex;gap:1rem;">
                     <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
-                        <input type="checkbox" id="pushToHold" onchange="autoSave()"> Push-to-Hold
+                        <input type="checkbox" id="pushToHold" onchange="autoSave()" {% if push_to_hold %}checked{% endif %}> Push-to-Hold
                     </label>
                     <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
-                        <input type="checkbox" id="clipboardMode" onchange="autoSave()" checked> Type into document
+                        <input type="checkbox" id="clipboardMode" onchange="autoSave()" {% if clipboard_mode %}checked{% endif %}> Type into document
                     </label>
                 </div>
             </div>
@@ -642,6 +642,23 @@ HTML_TEMPLATE = """
                     <div class="row"><span class="key">Time</span><span class="val" id="sttTimeVal"></span></div>
                     <div class="row"><span class="key">Result</span><span class="val" id="sttResultVal"></span></div>
                 </div>
+            </div>
+
+            <div class="section-header" onclick="toggleCommands()">
+                <span class="label">Voice Commands</span>
+                <span><span class="count">13</span> <span class="chevron" id="cmdChevron">▶</span></span>
+            </div>
+            <div class="section-body" id="cmdBody">
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"new line" / "newline"</span><span style="color:var(--text-dim);">→ line break</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"new paragraph"</span><span style="color:var(--text-dim);">→ double line break</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"period" / "comma" / "?" / "!"</span><span style="color:var(--text-dim);">→ punctuation</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"colon" / "semicolon"</span><span style="color:var(--text-dim);">→ : ;</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"open/close quote"</span><span style="color:var(--text-dim);">→ ""</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"open/close parenthesis"</span><span style="color:var(--text-dim);">→ ( )</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"tab"</span><span style="color:var(--text-dim);">→ tab character</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"delete last word"</span><span style="color:var(--text-dim);">→ 4 backspaces</span></div>
+                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"delete last sentence"</span><span style="color:var(--text-dim);">→ 20 backspaces</span></div>
+                <div class="history-entry" style="color:var(--text-dim);font-size:0.75rem;padding-top:0.25rem;border:none;">Say these phrases exactly for them to be recognized.</div>
             </div>
 
             <div class="section-header" onclick="toggleHistory()">
@@ -863,6 +880,13 @@ HTML_TEMPLATE = """
         }
 
         let historyOpen = false;
+        let commandsOpen = false;
+
+        function toggleCommands() {
+            commandsOpen = !commandsOpen;
+            document.getElementById('cmdBody').classList.toggle('open', commandsOpen);
+            document.getElementById('cmdChevron').classList.toggle('open', commandsOpen);
+        }
 
         function toggleHistory() {
             historyOpen = !historyOpen;
@@ -983,6 +1007,8 @@ def index():
         active_device=voice_dictation.DEVICE_INDEX,
         silence_threshold=voice_dictation.SILENCE_THRESHOLD,
         beep_enabled=voice_dictation.BEEP_ENABLED,
+        push_to_hold=dict_app.push_to_hold,
+        clipboard_mode=dict_app.clipboard_mode,
     )
 
 
@@ -1003,20 +1029,16 @@ def save_settings():
         silence_threshold=data.get("silence_threshold"),
         beep_enabled=data.get("beep_enabled"),
         pulse_source=data.get("pulse_source"),
+        push_to_hold=data.get("push_to_hold"),
+        clipboard_mode=data.get("clipboard_mode"),
     )
-    # Apply non-persisted state changes immediately
+    # Apply non-persisted LLM state immediately
     llm_action = data.get("llm_action")
     if llm_action is not None:
         dict_app.llm_action = llm_action
     llm_instruction = data.get("llm_instruction")
     if llm_instruction is not None:
         dict_app.llm_instruction = llm_instruction
-    push_to_hold = data.get("push_to_hold")
-    if push_to_hold is not None:
-        dict_app.push_to_hold = push_to_hold
-    clipboard_mode = data.get("clipboard_mode")
-    if clipboard_mode is not None:
-        dict_app.clipboard_mode = clipboard_mode
     return jsonify({"success": True})
 
 

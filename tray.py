@@ -10,6 +10,7 @@ import threading
 import time
 import json
 import urllib.request
+import urllib.error
 
 UI_URL = "http://127.0.0.1:3221"
 
@@ -31,9 +32,13 @@ def api_get(path):
         return None
 
 
-def api_post(path):
+def api_post_json(path, data):
     try:
-        req = urllib.request.Request(f"{UI_URL}{path}", data=b"", method="POST")
+        payload = json.dumps(data).encode()
+        req = urllib.request.Request(
+            f"{UI_URL}{path}", data=payload, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
         urllib.request.urlopen(req, timeout=2)
     except Exception:
         pass
@@ -64,6 +69,37 @@ def update_icon(indicator):
     indicator.set_attention_icon("media-record")
 
 
+def _send_settings(patch):
+    api_post_json("/settings", patch)
+
+
+def _sync_menu(refs):
+    config = api_get("/llm_config")
+    if not config:
+        return
+
+    pth = config.get("push_to_hold", False)
+    refs["mode_push"].set_active(pth)
+    refs["mode_toggle"].set_active(not pth)
+
+    clip = config.get("clipboard_mode", True)
+    refs["output_type"].set_active(clip)
+    refs["output_clip"].set_active(not clip)
+
+    llm_action = config.get("llm_action", "off")
+    for action, item_key in [("off", "llm_off"), ("grammar", "llm_grammar"),
+                             ("translate", "llm_translate"), ("custom", "llm_custom")]:
+        item = refs[item_key]
+        base = refs["llm_base"][action]
+        item.set_label(f"\u2713 {base}" if action == llm_action else f"  {base}")
+
+    llm_inst = config.get("llm_instruction", "")
+    for lang, item in refs["lang_items"].items():
+        base = refs["lang_base"][lang]
+        is_active = (llm_action == "translate" and lang == llm_inst)
+        item.set_label(f"\u2713 {base}" if is_active else f"  {base}")
+
+
 def build_menu(indicator):
     menu = Gtk.Menu()
 
@@ -72,22 +108,91 @@ def build_menu(indicator):
     menu.append(item_status)
     menu.append(Gtk.SeparatorMenuItem())
 
+    # === Mode ===
+    mode_toggle = Gtk.RadioMenuItem(label="Toggle Mode")
+    mode_push = Gtk.RadioMenuItem(group=mode_toggle, label="Push-to-Hold")
+    mode_toggle.connect("activate", lambda _: _send_settings({"push_to_hold": False}))
+    mode_push.connect("activate", lambda _: _send_settings({"push_to_hold": True}))
+    menu.append(mode_toggle)
+    menu.append(mode_push)
+    menu.append(Gtk.SeparatorMenuItem())
+
+    # === Output ===
+    output_type = Gtk.RadioMenuItem(label="Type into document")
+    output_clip = Gtk.RadioMenuItem(group=output_type, label="Copy to Clipboard")
+    output_type.connect("activate", lambda _: _send_settings({"clipboard_mode": True}))
+    output_clip.connect("activate", lambda _: _send_settings({"clipboard_mode": False}))
+    menu.append(output_type)
+    menu.append(output_clip)
+    menu.append(Gtk.SeparatorMenuItem())
+
+    # === LLM submenu ===
+    llm_parent = Gtk.MenuItem(label="LLM Post-Process")
+    llm_sub = Gtk.Menu()
+
+    llm_base = {"off": "Off", "grammar": "Grammar Fix", "translate": "Translate", "custom": "Custom"}
+    llm_off = Gtk.MenuItem(label=f"  {llm_base['off']}")
+    llm_grammar = Gtk.MenuItem(label=f"  {llm_base['grammar']}")
+
+    llm_translate = Gtk.MenuItem(label=f"  {llm_base['translate']}")
+    lang_sub = Gtk.Menu()
+    langs = ["Hindi", "English", "French", "Spanish", "German", "Japanese", "Chinese", "Arabic"]
+    lang_items = {}
+    lang_base = {}
+    for lang in langs:
+        lang_base[lang] = lang
+        li = Gtk.MenuItem(label=f"  {lang}")
+        li.connect("activate", lambda _, lang_code=lang: _send_settings({
+            "llm_action": "translate", "llm_instruction": lang_code
+        }))
+        lang_sub.append(li)
+        lang_items[lang] = li
+    llm_translate.set_submenu(lang_sub)
+
+    llm_custom = Gtk.MenuItem(label=f"  {llm_base['custom']}")
+
+    llm_off.connect("activate", lambda _: _send_settings({"llm_action": "off"}))
+    llm_grammar.connect("activate", lambda _: _send_settings({"llm_action": "grammar"}))
+    llm_custom.connect("activate", lambda _: _send_settings({"llm_action": "custom"}))
+
+    for item in (llm_off, llm_grammar, llm_translate, llm_custom):
+        llm_sub.append(item)
+    llm_parent.set_submenu(llm_sub)
+    menu.append(llm_parent)
+    menu.append(Gtk.SeparatorMenuItem())
+
+    # === Reconnect Hotkey ===
     item_reconnect = Gtk.MenuItem(label="Reconnect Hotkey")
-    item_reconnect.connect("activate", lambda _: api_post("/restart_hotkey"))
+    item_reconnect.connect("activate", lambda _: api_post_json("/restart_hotkey", {}))
     menu.append(item_reconnect)
 
+    # === Open Web UI ===
     item_web = Gtk.MenuItem(label="Open Web UI")
-    item_web.connect("activate", lambda _: subprocess.run(
-        ["xdg-open", UI_URL], capture_output=True
-    ))
+    item_web.connect("activate", lambda _: subprocess.run(["xdg-open", UI_URL], capture_output=True))
     menu.append(item_web)
 
+    # === Quit ===
     item_quit = Gtk.MenuItem(label="Quit")
     item_quit.connect("activate", lambda _: Gtk.main_quit())
     menu.append(item_quit)
 
     menu.show_all()
     indicator.set_menu(menu)
+
+    refs = {
+        "mode_toggle": mode_toggle,
+        "mode_push": mode_push,
+        "output_type": output_type,
+        "output_clip": output_clip,
+        "llm_off": llm_off,
+        "llm_grammar": llm_grammar,
+        "llm_translate": llm_translate,
+        "llm_custom": llm_custom,
+        "llm_base": llm_base,
+        "lang_items": lang_items,
+        "lang_base": lang_base,
+    }
+    return refs
 
 
 def main():
@@ -98,19 +203,19 @@ def main():
     )
     indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
 
-    # Wait for Flask to be ready
     for _ in range(10):
         if api_get("/status") is not None:
             break
         time.sleep(1)
 
     update_icon(indicator)
-    build_menu(indicator)
+    refs = build_menu(indicator)
 
     def poll():
         while True:
             time.sleep(2)
             GLib.idle_add(update_icon, indicator)
+            GLib.idle_add(_sync_menu, refs)
 
     threading.Thread(target=poll, daemon=True).start()
     Gtk.main()

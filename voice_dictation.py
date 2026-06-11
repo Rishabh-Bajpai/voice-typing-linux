@@ -54,6 +54,8 @@ def load_config():
         "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
         "LLM_ACTION": "off",
         "LLM_INSTRUCTION": "",
+        "PUSH_TO_HOLD": False,
+        "CLIPBOARD_MODE": True,
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -90,6 +92,8 @@ PULSE_SOURCE_NAME = CONFIG["PULSE_SOURCE_NAME"]
 OPENAI_BASE_URL = CONFIG["OPENAI_BASE_URL"]
 OPENAI_CHAT_MODEL_ID = CONFIG["OPENAI_CHAT_MODEL_ID"]
 OPENAI_API_KEY = CONFIG["OPENAI_API_KEY"]
+PUSH_TO_HOLD = CONFIG["PUSH_TO_HOLD"]
+CLIPBOARD_MODE = CONFIG["CLIPBOARD_MODE"]
 
 _config_lock = threading.Lock()
 
@@ -295,6 +299,7 @@ class VoiceDictationApp:
         self.last_transcription = ""
         self.status = "Idle"
         self.hotkey_listener = None
+        self._release_listener = None
         self._streaming_worker_active = False
         self._transcribe_semaphore = threading.BoundedSemaphore(3)
         self._mic_test_active = False
@@ -304,9 +309,10 @@ class VoiceDictationApp:
         self.transcription_history = []
         self.llm_action = "off"
         self.llm_instruction = ""
-        self.push_to_hold = False
-        self.clipboard_mode = True
+        self.push_to_hold = PUSH_TO_HOLD
+        self.clipboard_mode = CLIPBOARD_MODE
         self._hotkey_pressed = False
+        self._pth_timer = None
 
     def notify(self, title, message):
         print(f"[{title}] {message}", flush=True)
@@ -379,35 +385,38 @@ class VoiceDictationApp:
         except Exception as e:
             print(f"[CLIP] xclip also failed: {e}", flush=True)
 
+    def _backspace(self, count):
+        try:
+            subprocess.run(
+                ["xdotool", "key"] + ["BackSpace"] * count,
+                capture_output=True, timeout=2,
+            )
+            return
+        except Exception:
+            pass
+        try:
+            from pynput.keyboard import Controller, Key
+            c = Controller()
+            for _ in range(count):
+                c.press(Key.backspace)
+                c.release(Key.backspace)
+        except Exception as e:
+            print(f"[TYPE] Backspace failed: {e}", flush=True)
+
     def process_and_output(self, text):
         if not text:
             return
 
         cmd = self._process_voice_commands(text)
         if cmd == "__DELETE_LAST_WORD__":
-            for _ in range(4):
-                subprocess.run(["xdotool", "key", "BackSpace"], capture_output=True)
-                try:
-                    from pynput.keyboard import Controller, Key
-                    Controller().press(Key.backspace)
-                    Controller().release(Key.backspace)
-                except Exception:
-                    pass
+            self._backspace(4)
             return
         if cmd == "__DELETE_LAST_SENTENCE__":
-            for _ in range(20):
-                subprocess.run(["xdotool", "key", "BackSpace"], capture_output=True)
-                try:
-                    from pynput.keyboard import Controller, Key
-                    Controller().press(Key.backspace)
-                    Controller().release(Key.backspace)
-                except Exception:
-                    pass
+            self._backspace(20)
             return
-        if cmd in ("\n", "\n\n"):
-            pass  # fall through to type
+        skip_llm = cmd in ("\n", "\n\n", "\t", ".", ",", "?", "!", ":", ";", "\u201c", "\u201d", "(", ")")
 
-        if not STREAMING_MODE and self.llm_action != "off":
+        if not STREAMING_MODE and self.llm_action != "off" and not skip_llm:
             processed = llm_process(cmd or text, self.llm_action, self.llm_instruction)
         else:
             processed = cmd or text
@@ -432,13 +441,6 @@ class VoiceDictationApp:
             return
         print(f"Injecting: '{text}'", flush=True)
         self.last_transcription = text
-        self.transcription_history.append({
-            "text": text,
-            "time": time.strftime("%H:%M:%S"),
-            "source": "streaming" if STREAMING_MODE else "batch",
-        })
-        if len(self.transcription_history) > 50:
-            self.transcription_history.pop(0)
         try:
             result = subprocess.run(
                 ["xdotool", "type", "--clearmodifiers", text], capture_output=True, timeout=3
@@ -467,9 +469,12 @@ class VoiceDictationApp:
         silence_threshold=None,
         beep_enabled=None,
         pulse_source=None,
+        push_to_hold=None,
+        clipboard_mode=None,
     ):
         global STT_ENDPOINT, STT_MODEL, STREAMING_MODE, HOTKEY_STR
         global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED, PULSE_SOURCE_NAME
+        global PUSH_TO_HOLD, CLIPBOARD_MODE
 
         need_hotkey_restart = False
 
@@ -503,6 +508,14 @@ class VoiceDictationApp:
                 PULSE_SOURCE_NAME = pulse_source.strip() or None
                 self.recorder.pulse_source_name = PULSE_SOURCE_NAME
 
+            if push_to_hold is not None:
+                PUSH_TO_HOLD = bool(push_to_hold)
+                self.push_to_hold = PUSH_TO_HOLD
+
+            if clipboard_mode is not None:
+                CLIPBOARD_MODE = bool(clipboard_mode)
+                self.clipboard_mode = CLIPBOARD_MODE
+
         if need_hotkey_restart and self.is_running:
             if self.is_recording:
                 print("Hotkey changed while recording — stopping first", flush=True)
@@ -522,6 +535,8 @@ class VoiceDictationApp:
                 "HOTKEY_STR": HOTKEY_STR,
                 "SILENCE_DURATION": SILENCE_DURATION,
                 "PULSE_SOURCE_NAME": PULSE_SOURCE_NAME,
+                "PUSH_TO_HOLD": PUSH_TO_HOLD,
+                "CLIPBOARD_MODE": CLIPBOARD_MODE,
             }
         )
 
@@ -564,7 +579,19 @@ class VoiceDictationApp:
         if STREAMING_MODE:
             threading.Thread(target=self._streaming_worker, daemon=True).start()
 
+        # Safety timeout: auto-stop after 5s if key release not detected
+        def timeout():
+            print("[PTH] Safety timeout — stopping", flush=True)
+            self._push_to_hold_stop()
+
+        self._pth_timer = threading.Timer(5.0, timeout)
+        self._pth_timer.daemon = True
+        self._pth_timer.start()
+
     def _push_to_hold_stop(self):
+        if self._pth_timer:
+            self._pth_timer.cancel()
+            self._pth_timer = None
         with self._lock:
             if not self.is_recording:
                 return
@@ -634,6 +661,13 @@ class VoiceDictationApp:
             text = self.transcribe(temp_file)
             if text:
                 print(f"[STREAM] '{text}'", flush=True)
+                self.transcription_history.append({
+                    "text": text,
+                    "time": time.strftime("%H:%M:%S"),
+                    "source": "streaming",
+                })
+                if len(self.transcription_history) > 50:
+                    self.transcription_history.pop(0)
                 self.type_text(text + " ")
             try:
                 os.remove(temp_file)
@@ -707,13 +741,16 @@ class VoiceDictationApp:
         with self._lock:
             if not self.is_running:
                 return
+            if self._pth_timer:
+                self._pth_timer.cancel()
+                self._pth_timer = None
             if self.hotkey_listener:
                 self.hotkey_listener.stop()
             if self._release_listener:
                 self._release_listener.stop()
             self.is_running = False
             self.is_recording = False
-        self.recorder.stop()
+            self.recorder.stop()
         self.notify("Service", "Daemon Stopped")
 
     def restart_hotkey(self):
@@ -805,6 +842,7 @@ class VoiceDictationApp:
     def test_stt_endpoint(self):
         pulse_src = None
         old_pulse = None
+        test_file = "/tmp/vds_stt_test.wav"
         try:
             duration = 2.0
 
@@ -840,7 +878,6 @@ class VoiceDictationApp:
             elif pulse_src:
                 os.environ.pop("PULSE_SOURCE", None)
 
-            test_file = "/tmp/vds_stt_test.wav"
             wav.write(test_file, rate_to_use, recording)
 
             start = time.time()
@@ -870,6 +907,12 @@ class VoiceDictationApp:
                 "endpoint": STT_ENDPOINT,
                 "model": STT_MODEL,
             }
+        finally:
+            try:
+                if os.path.exists(test_file):
+                    os.remove(test_file)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

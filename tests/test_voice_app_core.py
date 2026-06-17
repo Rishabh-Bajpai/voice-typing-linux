@@ -96,14 +96,23 @@ def test_transcribe_failure_returns_none(vd, tmp_path, monkeypatch):
 def test_type_text_falls_back_to_controller_when_xdotool_fails(vd, monkeypatch):
     app = vd.VoiceDictationApp()
 
-    monkeypatch.setattr(
-        vd.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1)
-    )
+    # Make paste fail (xclip), xdotool type fail (non-zero), then pynput fallback
+    call_log = []
+    def fake_run(cmd, **kw):
+        call_log.append(cmd[:3])
+        if "xclip" in cmd:
+            raise RuntimeError("xclip not available")
+        if cmd[:2] == ["xdotool", "key"]:
+            raise RuntimeError("paste fail")
+        return SimpleNamespace(returncode=1, stderr=b"")
+    monkeypatch.setattr(vd.subprocess, "run", fake_run)
+
     app.type_text("typed")
 
     from pynput.keyboard import Controller
 
     assert Controller.typed_text[-1] == "typed"
+    assert any("xdotool" in c and "type" in c for c in call_log)
 
 
 def test_audio_recorder_stop_writes_wav_and_returns_path(vd, monkeypatch):

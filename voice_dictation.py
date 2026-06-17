@@ -313,6 +313,8 @@ class VoiceDictationApp:
         self.clipboard_mode = CLIPBOARD_MODE
         self._hotkey_pressed = False
         self._pth_timer = None
+        self._typing_lock = threading.Lock()
+        self._last_hotkey_time = 0.0
 
     def notify(self, title, message):
         print(f"[{title}] {message}", flush=True)
@@ -439,25 +441,50 @@ class VoiceDictationApp:
     def type_text(self, text):
         if not text:
             return
-        print(f"Injecting: '{text}'", flush=True)
-        self.last_transcription = text
-        try:
-            result = subprocess.run(
-                ["xdotool", "type", "--clearmodifiers", text], capture_output=True, timeout=3
-            )
-            if result.returncode == 0:
-                print(f"[TYPE] Typed via xdotool: '{text[:50]}'", flush=True)
+        with self._typing_lock:
+            print(f"Injecting: '{text}'", flush=True)
+            self.last_transcription = text
+            if self._paste_via_clipboard(text):
                 return
-            print(f"[TYPE] xdotool failed (code {result.returncode}): {result.stderr.decode()[:100]}", flush=True)
-        except Exception as e:
-            print(f"[TYPE] xdotool error: {e}", flush=True)
+            try:
+                result = subprocess.run(
+                    ["xdotool", "type", "--clearmodifiers", text], capture_output=True, timeout=30
+                )
+                if result.returncode == 0:
+                    print(f"[TYPE] Typed via xdotool: '{text[:50]}'", flush=True)
+                    return
+                print(f"[TYPE] xdotool failed (code {result.returncode}): {result.stderr.decode()[:100]}", flush=True)
+            except Exception as e:
+                print(f"[TYPE] xdotool error: {e}", flush=True)
+            try:
+                from pynput.keyboard import Controller
+                Controller().type(text)
+                print(f"[TYPE] Typed via pynput: '{text[:50]}'", flush=True)
+            except Exception as e:
+                print(f"[TYPE] pynput also failed: {e}", flush=True)
+                print("Warning: both xdotool and pynput failed to type text", flush=True)
+
+    def _paste_via_clipboard(self, text):
         try:
-            from pynput.keyboard import Controller
-            Controller().type(text)
-            print(f"[TYPE] Typed via pynput: '{text[:50]}'", flush=True)
+            import pyperclip
+            pyperclip.copy(text)
         except Exception as e:
-            print(f"[TYPE] pynput also failed: {e}", flush=True)
-            print("Warning: both xdotool and pynput failed to type text", flush=True)
+            print(f"[TYPE] pyperclip copy failed: {e}", flush=True)
+            try:
+                subprocess.run(["xclip", "-selection", "clipboard"], input=text, text=True, timeout=3)
+            except Exception as e2:
+                print(f"[TYPE] xclip also failed: {e2}", flush=True)
+                return False
+        try:
+            subprocess.run(
+                ["xdotool", "key", "--clearmodifiers", "ctrl+v"],
+                capture_output=True, timeout=3,
+            )
+            print(f"[TYPE] Pasted via clipboard: '{text[:50]}'", flush=True)
+            return True
+        except Exception as e:
+            print(f"[TYPE] ctrl+v paste failed, falling back: {e}", flush=True)
+            return False
 
     def update_config(
         self,
@@ -731,6 +758,10 @@ class VoiceDictationApp:
         threading.Thread(target=listen, daemon=True).start()
 
     def _on_hotkey(self):
+        now = time.time()
+        if now - self._last_hotkey_time < 0.3:
+            return
+        self._last_hotkey_time = now
         if self.push_to_hold:
             if not self.is_recording:
                 self._push_to_hold_start()

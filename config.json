@@ -7,5 +7,7 @@
     "DEVICE_INDEX": 4,
     "HOTKEY_STR": "<cmd>+<shift>+s",
     "SILENCE_DURATION": 0.8,
-    "PULSE_SOURCE_NAME": null
+    "PULSE_SOURCE_NAME": null,
+    "PUSH_TO_HOLD": false,
+    "CLIPBOARD_MODE": true
 }

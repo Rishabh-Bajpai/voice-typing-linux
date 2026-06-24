@@ -83,6 +83,7 @@ When the first word of transcribed speech matches the configured **wake word** (
 You say:       "Chanakya, turn on the lights"
 Transcribed:   "Chanakya, turn on the lights"
 POSTed to URL: "turn on the lights"
+History:       "↪ turn on the lights"  (amber dot)
 ```
 
 **Example flow with LLM on (grammar):**

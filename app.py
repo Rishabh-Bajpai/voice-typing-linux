@@ -427,6 +427,7 @@ HTML_TEMPLATE = """
 
         .history-dot.streaming { background: var(--primary); }
         .history-dot.batch { background: var(--accent); }
+        .history-dot.command { background: #f59e0b; }
 
         .stt-test-area {
             display: grid;

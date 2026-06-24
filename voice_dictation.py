@@ -517,9 +517,10 @@ class VoiceDictationApp:
             if not STREAMING_MODE and self.llm_action != "off":
                 command_text = llm_process(command_text, self.llm_action, self.llm_instruction)
             self.send_command(command_text)
-            self.last_transcription = command_text
+            display_text = f"↪ {command_text}"
+            self.last_transcription = display_text
             self.transcription_history.append({
-                "text": command_text,
+                "text": display_text,
                 "time": time.strftime("%H:%M:%S"),
                 "source": "command",
             })

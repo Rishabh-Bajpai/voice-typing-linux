@@ -506,6 +506,7 @@ HTML_TEMPLATE = """
                     <span id="statusText">Disconnected</span>
                 </div>
                 <button onclick="restartHotkey()" id="hkBtn" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.7rem;padding:0.25rem 0.5rem;border-radius:6px;margin-left:0.5rem;" title="Reconnect hotkey after login/sleep">⌨️ Reset</button>
+                <button onclick="reinitAudio()" id="reinitBtn" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.7rem;padding:0.25rem 0.5rem;border-radius:6px;" title="Reset audio device (fixes mic stuck after call)">🎤 Reinit</button>
             </div>
 
             <div class="form-section">
@@ -812,6 +813,14 @@ HTML_TEMPLATE = """
             btn.innerText = '⌨️ ...';
             await fetch('/restart_hotkey', {method: 'POST'});
             setTimeout(() => btn.innerText = '⌨️ Reset', 1000);
+        }
+
+        async function reinitAudio() {
+            const btn = document.getElementById('reinitBtn');
+            btn.innerText = '🎤 ...';
+            await fetch('/reinit_audio', {method: 'POST'});
+            await loadDevices();
+            setTimeout(() => btn.innerText = '🎤 Reinit', 1000);
         }
 
         let micTestActive = false;
@@ -1144,6 +1153,12 @@ def export_history():
 @app.route("/restart_hotkey", methods=["POST"])
 def restart_hotkey():
     dict_app.restart_hotkey()
+    return jsonify({"success": True})
+
+
+@app.route("/reinit_audio", methods=["POST"])
+def reinit_audio():
+    dict_app.reinit_audio()
     return jsonify({"success": True})
 
 

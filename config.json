@@ -4,10 +4,12 @@
     "STREAMING_MODE": false,
     "BEEP_ENABLED": true,
     "SILENCE_THRESHOLD": 0.015,
-    "DEVICE_INDEX": 4,
+    "DEVICE_INDEX": 9,
     "HOTKEY_STR": "<cmd>+<shift>+s",
     "SILENCE_DURATION": 0.8,
     "PULSE_SOURCE_NAME": null,
     "PUSH_TO_HOLD": false,
-    "CLIPBOARD_MODE": true
+    "CLIPBOARD_MODE": true,
+    "LLM_ACTION": "grammar",
+    "LLM_INSTRUCTION": ""
 }

@@ -241,38 +241,68 @@ class AudioRecorder:
             if STREAMING_MODE:
                 self.stream_queue.put(cp)
 
-        try:
-            # Re-check rate if device changed
-            device_info = sd.query_devices(target_device, "input")
-            default_rate = int(device_info["default_samplerate"])
-            rate_to_use = default_rate
+        def _cycle_pulse_source():
+            if pulse_src:
+                src = pulse_src
+            elif self.pulse_source_name:
+                src = self.pulse_source_name
+            else:
+                src = "@DEFAULT_SOURCE@"
             try:
-                sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
-                rate_to_use = RATE
-            except Exception:
-                pass
+                subprocess.run(
+                    ["pactl", "suspend-source", src, "true"],
+                    capture_output=True, timeout=3,
+                )
+                time.sleep(0.2)
+                subprocess.run(
+                    ["pactl", "suspend-source", src, "false"],
+                    capture_output=True, timeout=3,
+                )
+                time.sleep(0.3)
+                print(f"[REC] Cycled PulseAudio source {src}", flush=True)
+            except Exception as cycle_err:
+                print(f"[REC] PulseAudio source cycle failed: {cycle_err}", flush=True)
 
-            self.stream = sd.InputStream(
-                samplerate=rate_to_use,
-                device=target_device,
-                channels=CHANNELS,
-                callback=callback,
-            )
-            self.stream.start()
-            if pulse_src and old_pulse is not None:
-                os.environ["PULSE_SOURCE"] = old_pulse
-            elif pulse_src:
-                os.environ.pop("PULSE_SOURCE", None)
-            print(
-                f"[REC] Audio stream started on device {target_device} at {rate_to_use}Hz.",
-                flush=True,
-            )
-        except Exception as e:
-            if pulse_src and old_pulse is not None:
-                os.environ["PULSE_SOURCE"] = old_pulse
-            elif pulse_src:
-                os.environ.pop("PULSE_SOURCE", None)
-            raise e
+        for attempt in range(2):
+            if pulse_src:
+                os.environ["PULSE_SOURCE"] = pulse_src
+            try:
+                # Re-check rate if device changed
+                device_info = sd.query_devices(target_device, "input")
+                default_rate = int(device_info["default_samplerate"])
+                rate_to_use = default_rate
+                try:
+                    sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
+                    rate_to_use = RATE
+                except Exception:
+                    pass
+
+                self.rate = rate_to_use
+
+                self.stream = sd.InputStream(
+                    samplerate=rate_to_use,
+                    device=target_device,
+                    channels=CHANNELS,
+                    callback=callback,
+                )
+                self.stream.start()
+                print(
+                    f"[REC] Audio stream started on device {target_device} at {rate_to_use}Hz.",
+                    flush=True,
+                )
+                break
+            except Exception as e:
+                err_str = str(e)
+                if attempt == 0 and ("-9985" in err_str or "PaErrorCode" in err_str or "Device unavailable" in err_str or "Input/output error" in err_str):
+                    print(f"[REC] Device unavailable (attempt {attempt+1}), cycling PulseAudio source...", flush=True)
+                    _cycle_pulse_source()
+                    continue
+                raise e
+
+        if pulse_src and old_pulse is not None:
+            os.environ["PULSE_SOURCE"] = old_pulse
+        elif pulse_src:
+            os.environ.pop("PULSE_SOURCE", None)
 
     def stop(self):
         self.recording = False
@@ -611,7 +641,13 @@ class VoiceDictationApp:
                 self.is_recording = True
                 self.play_beep(800, 0.1)
                 self.notify("Recording", "Speak now...")
-                self.recorder.start(device_index=DEVICE_INDEX, pulse_source=PULSE_SOURCE_NAME)
+                try:
+                    self.recorder.start(device_index=DEVICE_INDEX, pulse_source=PULSE_SOURCE_NAME)
+                except Exception as e:
+                    self.is_recording = False
+                    self.notify("Microphone Error", str(e)[:80])
+                    print(f"[ERROR] Failed to start recording: {e}", flush=True)
+                    return
                 if STREAMING_MODE:
                     threading.Thread(target=self._streaming_worker, daemon=True).start()
             else:
@@ -638,7 +674,14 @@ class VoiceDictationApp:
             self.is_recording = True
         self.play_beep(800, 0.1)
         self.notify("Recording", "Speak now...")
-        self.recorder.start(device_index=DEVICE_INDEX, pulse_source=PULSE_SOURCE_NAME)
+        try:
+            self.recorder.start(device_index=DEVICE_INDEX, pulse_source=PULSE_SOURCE_NAME)
+        except Exception as e:
+            with self._lock:
+                self.is_recording = False
+            self.notify("Microphone Error", str(e)[:80])
+            print(f"[ERROR] Failed to start recording: {e}", flush=True)
+            return
         if STREAMING_MODE:
             threading.Thread(target=self._streaming_worker, daemon=True).start()
 
@@ -836,6 +879,15 @@ class VoiceDictationApp:
             self._release_listener = None
         self._start_hotkey_listener()
         print("[HOTKEY] Restarted", flush=True)
+
+    def reinit_audio(self):
+        if self.is_recording:
+            self._push_to_hold_stop() if self.push_to_hold else self.toggle_recording()
+        old_device = self.recorder.device_index
+        self.recorder = AudioRecorder()
+        new_device = self.recorder.device_index
+        print(f"[AUDIO] Reinitialized recorder (device {old_device} -> {new_device})", flush=True)
+        self.notify("Audio", f"Reinitialized (device {new_device})")
 
     def start_mic_test(self):
         if self._mic_test_stream is not None:

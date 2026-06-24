@@ -501,6 +501,8 @@ class VoiceDictationApp:
         if not text:
             return
 
+        print(f"[RAW] Transcribed: '{text}'", flush=True)
+
         cmd = self._process_voice_commands(text)
         if cmd == "__DELETE_LAST_WORD__":
             self._backspace(4)
@@ -510,6 +512,7 @@ class VoiceDictationApp:
             return
 
         wake_detected, wake_rest = self._detect_wake_word(text)
+        print(f"[WAKE] Detected={wake_detected}, first_word='{text.split(' ')[0] if text else ''}', rest='{wake_rest}'", flush=True)
         if wake_detected:
             command_text = wake_rest.strip()
             if not command_text:

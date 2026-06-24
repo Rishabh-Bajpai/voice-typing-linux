@@ -157,4 +157,5 @@ def vd(tmp_path, monkeypatch):
 
     module = importlib.reload(voice_dictation)
     monkeypatch.setattr(module, "CONFIG_FILE", str(tmp_path / "config.json"))
+    monkeypatch.setattr(module, "HISTORY_FILE", str(tmp_path / "history.json"))
     return module

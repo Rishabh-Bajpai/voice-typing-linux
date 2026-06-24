@@ -30,6 +30,7 @@ CHANNELS = 1
 RATE = 16000
 AUDIO_FILE = "/tmp/voice_typing.wav"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".voice_typing_history.json")
 
 
 def load_config():
@@ -94,6 +95,8 @@ OPENAI_CHAT_MODEL_ID = CONFIG["OPENAI_CHAT_MODEL_ID"]
 OPENAI_API_KEY = CONFIG["OPENAI_API_KEY"]
 PUSH_TO_HOLD = CONFIG["PUSH_TO_HOLD"]
 CLIPBOARD_MODE = CONFIG["CLIPBOARD_MODE"]
+LLM_ACTION = CONFIG["LLM_ACTION"]
+LLM_INSTRUCTION = CONFIG["LLM_INSTRUCTION"]
 
 _config_lock = threading.Lock()
 
@@ -307,14 +310,34 @@ class VoiceDictationApp:
         self._mic_test_stream = None
         self._mic_test_seq = 0
         self.transcription_history = []
-        self.llm_action = "off"
-        self.llm_instruction = ""
+        self._load_history()
+        self.llm_action = LLM_ACTION
+        self.llm_instruction = LLM_INSTRUCTION
         self.push_to_hold = PUSH_TO_HOLD
         self.clipboard_mode = CLIPBOARD_MODE
         self._hotkey_pressed = False
         self._pth_timer = None
         self._typing_lock = threading.Lock()
         self._last_hotkey_time = 0.0
+
+    def _load_history(self):
+        try:
+            if os.path.exists(HISTORY_FILE):
+                with open(HISTORY_FILE, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.transcription_history = data[-50:]
+        except Exception as e:
+            print(f"Error loading history: {e}", flush=True)
+            self.transcription_history = []
+
+    def _save_history(self):
+        try:
+            data = self.transcription_history[-50:]
+            with open(HISTORY_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"Error saving history: {e}", flush=True)
 
     def notify(self, title, message):
         print(f"[{title}] {message}", flush=True)
@@ -341,7 +364,7 @@ class VoiceDictationApp:
                 files = {"file": (os.path.basename(file_path), f, "audio/wav")}
                 data = {"model": STT_MODEL}
                 response = requests.post(
-                    STT_ENDPOINT, files=files, data=data, timeout=30
+                    STT_ENDPOINT, files=files, data=data, timeout=300
                 )
                 response.raise_for_status()
                 return response.json().get("text", "").strip()
@@ -431,6 +454,7 @@ class VoiceDictationApp:
         })
         if len(self.transcription_history) > 50:
             self.transcription_history.pop(0)
+        self._save_history()
 
         print(f"Output: '{processed}'", flush=True)
         if self.clipboard_mode:
@@ -498,10 +522,12 @@ class VoiceDictationApp:
         pulse_source=None,
         push_to_hold=None,
         clipboard_mode=None,
+        llm_action=None,
+        llm_instruction=None,
     ):
         global STT_ENDPOINT, STT_MODEL, STREAMING_MODE, HOTKEY_STR
         global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED, PULSE_SOURCE_NAME
-        global PUSH_TO_HOLD, CLIPBOARD_MODE
+        global PUSH_TO_HOLD, CLIPBOARD_MODE, LLM_ACTION, LLM_INSTRUCTION
 
         need_hotkey_restart = False
 
@@ -543,6 +569,14 @@ class VoiceDictationApp:
                 CLIPBOARD_MODE = bool(clipboard_mode)
                 self.clipboard_mode = CLIPBOARD_MODE
 
+            if llm_action is not None:
+                LLM_ACTION = llm_action
+                self.llm_action = LLM_ACTION
+
+            if llm_instruction is not None:
+                LLM_INSTRUCTION = llm_instruction
+                self.llm_instruction = LLM_INSTRUCTION
+
         if need_hotkey_restart and self.is_running:
             if self.is_recording:
                 print("Hotkey changed while recording — stopping first", flush=True)
@@ -564,6 +598,8 @@ class VoiceDictationApp:
                 "PULSE_SOURCE_NAME": PULSE_SOURCE_NAME,
                 "PUSH_TO_HOLD": PUSH_TO_HOLD,
                 "CLIPBOARD_MODE": CLIPBOARD_MODE,
+                "LLM_ACTION": LLM_ACTION,
+                "LLM_INSTRUCTION": LLM_INSTRUCTION,
             }
         )
 
@@ -606,12 +642,12 @@ class VoiceDictationApp:
         if STREAMING_MODE:
             threading.Thread(target=self._streaming_worker, daemon=True).start()
 
-        # Safety timeout: auto-stop after 5s if key release not detected
+        # Safety timeout: auto-stop after 30min if key release not detected
         def timeout():
             print("[PTH] Safety timeout — stopping", flush=True)
             self._push_to_hold_stop()
 
-        self._pth_timer = threading.Timer(5.0, timeout)
+        self._pth_timer = threading.Timer(1800.0, timeout)
         self._pth_timer.daemon = True
         self._pth_timer.start()
 
@@ -695,6 +731,7 @@ class VoiceDictationApp:
                 })
                 if len(self.transcription_history) > 50:
                     self.transcription_history.pop(0)
+                self._save_history()
                 self.type_text(text + " ")
             try:
                 os.remove(temp_file)

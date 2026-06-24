@@ -1031,14 +1031,9 @@ def save_settings():
         pulse_source=data.get("pulse_source"),
         push_to_hold=data.get("push_to_hold"),
         clipboard_mode=data.get("clipboard_mode"),
+        llm_action=data.get("llm_action"),
+        llm_instruction=data.get("llm_instruction"),
     )
-    # Apply non-persisted LLM state immediately
-    llm_action = data.get("llm_action")
-    if llm_action is not None:
-        dict_app.llm_action = llm_action
-    llm_instruction = data.get("llm_instruction")
-    if llm_instruction is not None:
-        dict_app.llm_instruction = llm_instruction
     return jsonify({"success": True})
 
 

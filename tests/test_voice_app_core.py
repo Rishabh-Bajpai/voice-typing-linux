@@ -79,7 +79,7 @@ def test_transcribe_success_sends_model_payload(vd, tmp_path, monkeypatch):
     assert text == "hello world"
     assert captured["url"].startswith("http://localhost:1234")
     assert captured["data"] == {"model": "generic-model"}
-    assert captured["timeout"] == 30
+    assert captured["timeout"] == 300
     assert captured["filename"] == "clip.wav"
 
 

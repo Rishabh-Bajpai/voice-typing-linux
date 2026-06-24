@@ -57,8 +57,8 @@ def load_config():
         "LLM_INSTRUCTION": "",
         "PUSH_TO_HOLD": False,
         "CLIPBOARD_MODE": True,
-        "WAKE_WORD": os.getenv("VOICE_TYPING_WAKE_WORD", "chanakya"),
-        "COMMAND_URL": os.getenv("VOICE_TYPING_COMMAND_URL", ""),
+        "WAKE_WORD": "chanakya",
+        "COMMAND_URL": "",
     }
     if os.path.exists(CONFIG_FILE):
         try:

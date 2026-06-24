@@ -189,14 +189,13 @@ class AudioRecorder:
                     sd_idx = alsa_card_to_sd.get(int(alsa_card))
 
                 label = desc or src_name
-                if sd_idx is not None:
-                    devices.append({"index": sd_idx, "name": f"(audio) {label}"})
-                else:
-                    devices.append({
-                        "index": 9,
-                        "name": f"(audio) {label}",
-                        "pulse_source": src_name,
-                    })
+                # Always attach PulseAudio source name so the frontend can send it back;
+                # this allows routing through PulseAudio (device 9) for shared mic access.
+                devices.append({
+                    "index": sd_idx if sd_idx is not None else 9,
+                    "name": f"(audio) {label}",
+                    "pulse_source": src_name,
+                })
 
             devices.sort(key=lambda d: d["index"] if d.get("pulse_source") else d["index"])
         except Exception as e:
@@ -226,6 +225,9 @@ class AudioRecorder:
         old_pulse = os.environ.get("PULSE_SOURCE")
         if pulse_src:
             os.environ["PULSE_SOURCE"] = pulse_src
+            # Route through PulseAudio (index 9) instead of raw ALSA index so
+            # PulseAudio can multiplex the source across multiple apps (calls, Zoom, etc.).
+            target_device = 9
 
         while not self.stream_queue.empty():
             try:
@@ -277,6 +279,8 @@ class AudioRecorder:
                 except Exception:
                     pass
 
+                # Sync self.rate with actual stream rate so stop() writes the WAV
+                # header at the correct sample rate (was a source of garbled audio).
                 self.rate = rate_to_use
 
                 self.stream = sd.InputStream(
@@ -293,6 +297,9 @@ class AudioRecorder:
                 break
             except Exception as e:
                 err_str = str(e)
+                # PulseAudio can leave a source in a suspended state after a stream
+                # crashes (e.g. a call ended abruptly). Cycling suspend-source forces
+                # PulseAudio to re-probe the ALSA device and clears the error.
                 if attempt == 0 and ("-9985" in err_str or "PaErrorCode" in err_str or "Device unavailable" in err_str or "Input/output error" in err_str):
                     print(f"[REC] Device unavailable (attempt {attempt+1}), cycling PulseAudio source...", flush=True)
                     _cycle_pulse_source()
@@ -638,6 +645,9 @@ class VoiceDictationApp:
     def toggle_recording(self):
         with self._lock:
             if not self.is_recording:
+                # is_recording must be True before start() so the stop path is
+                # reachable via the hotkey. On start() failure we reset it below
+                # to prevent the state machine from being stuck in "recording".
                 self.is_recording = True
                 self.play_beep(800, 0.1)
                 self.notify("Recording", "Speak now...")
@@ -671,6 +681,8 @@ class VoiceDictationApp:
         with self._lock:
             if self.is_recording:
                 return
+            # Same pattern as toggle_recording: set is_recording first so the
+            # release key listener can call _push_to_hold_stop; reset on failure.
             self.is_recording = True
         self.play_beep(800, 0.1)
         self.notify("Recording", "Speak now...")
@@ -881,6 +893,7 @@ class VoiceDictationApp:
         print("[HOTKEY] Restarted", flush=True)
 
     def reinit_audio(self):
+        """Re-create AudioRecorder from scratch — fresh device query, clears stale PulseAudio state."""
         if self.is_recording:
             self._push_to_hold_stop() if self.push_to_hold else self.toggle_recording()
         old_device = self.recorder.device_index
@@ -903,6 +916,8 @@ class VoiceDictationApp:
         old_pulse = os.environ.get("PULSE_SOURCE")
         if pulse_src:
             os.environ["PULSE_SOURCE"] = pulse_src
+            # Use PulseAudio device (index 9) for shared access, same as recorder.start()
+            target_device = 9
 
         device_info = sd.query_devices(target_device, "input")
         default_rate = int(device_info["default_samplerate"])
@@ -976,6 +991,8 @@ class VoiceDictationApp:
             old_pulse = os.environ.get("PULSE_SOURCE")
             if pulse_src:
                 os.environ["PULSE_SOURCE"] = pulse_src
+                # Use PulseAudio device for shared access, same as recorder.start()
+                target_device = 9
 
             device_info = sd.query_devices(target_device, "input")
             default_rate = int(device_info["default_samplerate"])

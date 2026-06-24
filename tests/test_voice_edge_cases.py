@@ -300,29 +300,74 @@ def test_type_text_does_not_append_history(vd, monkeypatch):
     assert app.last_transcription == "hello"
 
 
-def test_process_and_output_punctuation_skips_llm(vd, monkeypatch):
+def test_detect_wake_word(vd, monkeypatch):
     app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+
+    detected, rest = app._detect_wake_word("Chanakya, turn on the lights")
+    assert detected
+    assert rest == "turn on the lights"
+
+    detected, rest = app._detect_wake_word("chanakya turn on the lights")
+    assert detected
+    assert rest == "turn on the lights"
+
+    detected, rest = app._detect_wake_word("CHANAKYA! do something")
+    assert detected
+    assert rest == "do something"
+
+    detected, rest = app._detect_wake_word("turn on the lights")
+    assert not detected
+
+    detected, rest = app._detect_wake_word("Chanakya")
+    assert detected
+    assert rest == ""
+
+    detected, rest = app._detect_wake_word("turn on chanakya lights")
+    assert not detected
+
+
+def test_process_and_output_wake_word_dispatches_command(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.command_url = "https://ntfy.example.org/test"
+    app.llm_action = "off"
+    vd.STREAMING_MODE = False
+
+    sent = {"text": None}
+    monkeypatch.setattr(app, "send_command", lambda t: sent.__setitem__("text", t))
+    monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(app, "transcription_history", [])
+    monkeypatch.setattr(app, "_save_history", lambda: None)
+
+    app.process_and_output("Chanakya, turn on the lights")
+    assert sent["text"] == "turn on the lights", f"got {sent['text']!r}"
+
+    sent["text"] = None
+    app.process_and_output("Chanakya")
+    assert sent["text"] is None, "wake word alone should not send command"
+
+    sent["text"] = None
+    app.process_and_output("just regular dictation")
+    assert sent["text"] is None, "regular text should not send command"
+
+
+def test_process_and_output_wake_word_llm_processed(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.command_url = "https://ntfy.example.org/test"
     app.llm_action = "grammar"
     vd.STREAMING_MODE = False
 
-    calls = {"llm": False, "output": []}
-    monkeypatch.setattr(vd, "llm_process", lambda text, action, inst: (
-        calls.__setitem__("llm", True) or text
-    ))
-    monkeypatch.setattr(app, "type_text", lambda t: calls["output"].append(t))
-    monkeypatch.setattr(app, "copy_to_clipboard", lambda t: calls["output"].append(t))
+    sent = {"text": None}
+    monkeypatch.setattr(vd, "llm_process", lambda text, action, inst: text.capitalize())
+    monkeypatch.setattr(app, "send_command", lambda t: sent.__setitem__("text", t))
     monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(app, "transcription_history", [])
+    monkeypatch.setattr(app, "_save_history", lambda: None)
 
-    app.process_and_output("period")
-    assert not calls["llm"], "punctuation should not reach LLM"
-
-    calls["llm"] = False
-    app.process_and_output("new line")
-    assert not calls["llm"], "newline should not reach LLM"
-
-    calls["llm"] = False
-    app.process_and_output("fix this sentence")
-    assert calls["llm"], "regular text should reach LLM"
+    app.process_and_output("Chanakya, turn on the lights")
+    assert sent["text"] == "Turn on the lights", f"got {sent['text']!r}"
 
 
 def test_push_to_hold_start_creates_timer(vd, monkeypatch):

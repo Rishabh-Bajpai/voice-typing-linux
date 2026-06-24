@@ -57,6 +57,8 @@ def load_config():
         "LLM_INSTRUCTION": "",
         "PUSH_TO_HOLD": False,
         "CLIPBOARD_MODE": True,
+        "WAKE_WORD": os.getenv("VOICE_TYPING_WAKE_WORD", "chanakya"),
+        "COMMAND_URL": os.getenv("VOICE_TYPING_COMMAND_URL", ""),
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -97,6 +99,24 @@ PUSH_TO_HOLD = CONFIG["PUSH_TO_HOLD"]
 CLIPBOARD_MODE = CONFIG["CLIPBOARD_MODE"]
 LLM_ACTION = CONFIG["LLM_ACTION"]
 LLM_INSTRUCTION = CONFIG["LLM_INSTRUCTION"]
+WAKE_WORD = CONFIG["WAKE_WORD"]
+COMMAND_URL = CONFIG["COMMAND_URL"]
+
+def _load_dotenv():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                val = val.strip().strip("\"'")
+                if key not in os.environ:
+                    os.environ[key] = val
+
+_load_dotenv()
 
 _config_lock = threading.Lock()
 
@@ -351,6 +371,8 @@ class VoiceDictationApp:
         self.llm_action = LLM_ACTION
         self.llm_instruction = LLM_INSTRUCTION
         self.push_to_hold = PUSH_TO_HOLD
+        self.wake_word = WAKE_WORD
+        self.command_url = COMMAND_URL
         self.clipboard_mode = CLIPBOARD_MODE
         self._hotkey_pressed = False
         self._pth_timer = None
@@ -411,20 +433,6 @@ class VoiceDictationApp:
 
     def _process_voice_commands(self, text):
         commands = {
-            "new line": "\n",
-            "newline": "\n",
-            "new paragraph": "\n\n",
-            "period": ".",
-            "comma": ",",
-            "question mark": "?",
-            "exclamation mark": "!",
-            "colon": ":",
-            "semicolon": ";",
-            "open quote": "\u201c",
-            "close quote": "\u201d",
-            "open parenthesis": "(",
-            "close parenthesis": ")",
-            "tab": "\t",
             "delete last word": "__DELETE_LAST_WORD__",
             "delete last sentence": "__DELETE_LAST_SENTENCE__",
         }
@@ -465,6 +473,30 @@ class VoiceDictationApp:
         except Exception as e:
             print(f"[TYPE] Backspace failed: {e}", flush=True)
 
+    def send_command(self, text):
+        if not self.command_url or not text:
+            return
+        try:
+            resp = requests.post(self.command_url, data=text.encode(), timeout=5)
+            print(f"[CMD] Sent '{text[:60]}' to {self.command_url} (status {resp.status_code})", flush=True)
+        except Exception as e:
+            print(f"[CMD] Failed to send command: {e}", flush=True)
+
+    def _detect_wake_word(self, text):
+        if not self.wake_word or not text:
+            return False, None
+        first_space = text.find(" ")
+        if first_space == -1:
+            first_word = text
+            rest = ""
+        else:
+            first_word = text[:first_space]
+            rest = text[first_space + 1:]
+        cleaned = first_word.strip().rstrip(",.!?:;\"'\u201c\u201d")
+        if cleaned.lower() == self.wake_word.lower():
+            return True, rest
+        return False, None
+
     def process_and_output(self, text):
         if not text:
             return
@@ -476,12 +508,31 @@ class VoiceDictationApp:
         if cmd == "__DELETE_LAST_SENTENCE__":
             self._backspace(20)
             return
-        skip_llm = cmd in ("\n", "\n\n", "\t", ".", ",", "?", "!", ":", ";", "\u201c", "\u201d", "(", ")")
 
-        if not STREAMING_MODE and self.llm_action != "off" and not skip_llm:
-            processed = llm_process(cmd or text, self.llm_action, self.llm_instruction)
+        wake_detected, wake_rest = self._detect_wake_word(text)
+        if wake_detected:
+            command_text = wake_rest.strip()
+            if not command_text:
+                return
+            if not STREAMING_MODE and self.llm_action != "off":
+                command_text = llm_process(command_text, self.llm_action, self.llm_instruction)
+            self.send_command(command_text)
+            self.last_transcription = command_text
+            self.transcription_history.append({
+                "text": command_text,
+                "time": time.strftime("%H:%M:%S"),
+                "source": "command",
+            })
+            if len(self.transcription_history) > 50:
+                self.transcription_history.pop(0)
+            self._save_history()
+            print(f"[CMD] Command processed: '{command_text}'", flush=True)
+            return
+
+        if not STREAMING_MODE and self.llm_action != "off":
+            processed = llm_process(text, self.llm_action, self.llm_instruction)
         else:
-            processed = cmd or text
+            processed = text
 
         self.last_transcription = processed
         self.transcription_history.append({
@@ -561,10 +612,13 @@ class VoiceDictationApp:
         clipboard_mode=None,
         llm_action=None,
         llm_instruction=None,
+        wake_word=None,
+        command_url=None,
     ):
         global STT_ENDPOINT, STT_MODEL, STREAMING_MODE, HOTKEY_STR
         global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED, PULSE_SOURCE_NAME
         global PUSH_TO_HOLD, CLIPBOARD_MODE, LLM_ACTION, LLM_INSTRUCTION
+        global WAKE_WORD, COMMAND_URL
 
         need_hotkey_restart = False
 
@@ -614,6 +668,14 @@ class VoiceDictationApp:
                 LLM_INSTRUCTION = llm_instruction
                 self.llm_instruction = LLM_INSTRUCTION
 
+            if wake_word is not None:
+                WAKE_WORD = wake_word.strip()
+                self.wake_word = WAKE_WORD
+
+            if command_url is not None:
+                COMMAND_URL = command_url.strip()
+                self.command_url = COMMAND_URL
+
         if need_hotkey_restart and self.is_running:
             if self.is_recording:
                 print("Hotkey changed while recording — stopping first", flush=True)
@@ -637,6 +699,8 @@ class VoiceDictationApp:
                 "CLIPBOARD_MODE": CLIPBOARD_MODE,
                 "LLM_ACTION": LLM_ACTION,
                 "LLM_INSTRUCTION": LLM_INSTRUCTION,
+                "WAKE_WORD": WAKE_WORD,
+                "COMMAND_URL": COMMAND_URL,
             }
         )
 

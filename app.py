@@ -586,6 +586,15 @@ HTML_TEMPLATE = """
                     <input type="text" id="llmCustomPrompt" placeholder="e.g. Convert to bullet points" onchange="autoSave()">
                 </div>
 
+                <div class="input-group">
+                    <label>Wake Word</label>
+                    <input type="text" id="wakeWord" value="{{ wake_word }}" placeholder="chanakya" onchange="autoSave()">
+                </div>
+                <div class="input-group">
+                    <label>Command URL</label>
+                    <input type="text" id="commandUrl" value="{{ command_url }}" placeholder="https://ntfy.example.org/" onchange="autoSave()">
+                </div>
+
                 <div class="input-group full-width" style="grid-column:span 2;display:flex;gap:1rem;">
                     <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
                         <input type="checkbox" id="pushToHold" onchange="autoSave()" {% if push_to_hold %}checked{% endif %}> Push-to-Hold
@@ -643,23 +652,6 @@ HTML_TEMPLATE = """
                     <div class="row"><span class="key">Time</span><span class="val" id="sttTimeVal"></span></div>
                     <div class="row"><span class="key">Result</span><span class="val" id="sttResultVal"></span></div>
                 </div>
-            </div>
-
-            <div class="section-header" onclick="toggleCommands()">
-                <span class="label">Voice Commands</span>
-                <span><span class="count">13</span> <span class="chevron" id="cmdChevron">▶</span></span>
-            </div>
-            <div class="section-body" id="cmdBody">
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"new line" / "newline"</span><span style="color:var(--text-dim);">→ line break</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"new paragraph"</span><span style="color:var(--text-dim);">→ double line break</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"period" / "comma" / "?" / "!"</span><span style="color:var(--text-dim);">→ punctuation</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"colon" / "semicolon"</span><span style="color:var(--text-dim);">→ : ;</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"open/close quote"</span><span style="color:var(--text-dim);">→ ""</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"open/close parenthesis"</span><span style="color:var(--text-dim);">→ ( )</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"tab"</span><span style="color:var(--text-dim);">→ tab character</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"delete last word"</span><span style="color:var(--text-dim);">→ 4 backspaces</span></div>
-                <div class="history-entry"><span style="color:var(--primary);min-width:10rem;display:inline-block;font-size:0.75rem;">"delete last sentence"</span><span style="color:var(--text-dim);">→ 20 backspaces</span></div>
-                <div class="history-entry" style="color:var(--text-dim);font-size:0.75rem;padding-top:0.25rem;border:none;">Say these phrases exactly for them to be recognized.</div>
             </div>
 
             <div class="section-header" onclick="toggleHistory()">
@@ -785,6 +777,8 @@ HTML_TEMPLATE = """
                 llm_instruction: getLlmInstruction(),
                 push_to_hold: document.getElementById('pushToHold').checked,
                 clipboard_mode: document.getElementById('clipboardMode').checked,
+                wake_word: document.getElementById('wakeWord').value,
+                command_url: document.getElementById('commandUrl').value,
             };
 
             await fetch('/settings', {
@@ -889,13 +883,6 @@ HTML_TEMPLATE = """
         }
 
         let historyOpen = false;
-        let commandsOpen = false;
-
-        function toggleCommands() {
-            commandsOpen = !commandsOpen;
-            document.getElementById('cmdBody').classList.toggle('open', commandsOpen);
-            document.getElementById('cmdChevron').classList.toggle('open', commandsOpen);
-        }
 
         function toggleHistory() {
             historyOpen = !historyOpen;
@@ -971,6 +958,8 @@ HTML_TEMPLATE = """
                     langSel.value = data.llm_instruction;
                 }
                 document.getElementById('llmCustomPrompt').value = (data.llm_action === 'custom' ? data.llm_instruction : '') || '';
+                document.getElementById('wakeWord').value = data.wake_word || 'chanakya';
+                document.getElementById('commandUrl').value = data.command_url || '';
                 onLlmActionChange();
             } catch (e) {}
         }
@@ -1018,6 +1007,8 @@ def index():
         beep_enabled=voice_dictation.BEEP_ENABLED,
         push_to_hold=dict_app.push_to_hold,
         clipboard_mode=dict_app.clipboard_mode,
+        wake_word=voice_dictation.WAKE_WORD,
+        command_url=voice_dictation.COMMAND_URL,
     )
 
 
@@ -1042,6 +1033,8 @@ def save_settings():
         clipboard_mode=data.get("clipboard_mode"),
         llm_action=data.get("llm_action"),
         llm_instruction=data.get("llm_instruction"),
+        wake_word=data.get("wake_word"),
+        command_url=data.get("command_url"),
     )
     return jsonify({"success": True})
 
@@ -1129,6 +1122,8 @@ def llm_config():
         "llm_instruction": dict_app.llm_instruction,
         "push_to_hold": dict_app.push_to_hold,
         "clipboard_mode": dict_app.clipboard_mode,
+        "wake_word": dict_app.wake_word,
+        "command_url": dict_app.command_url,
     })
 
 

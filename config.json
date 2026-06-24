@@ -11,5 +11,7 @@
     "PUSH_TO_HOLD": false,
     "CLIPBOARD_MODE": true,
     "LLM_ACTION": "grammar",
-    "LLM_INSTRUCTION": ""
+    "LLM_INSTRUCTION": "",
+    "WAKE_WORD": "chanakya",
+    "COMMAND_URL": "URL_REMOVED"
 }

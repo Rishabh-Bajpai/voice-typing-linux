@@ -131,7 +131,7 @@ def test_concurrent(source_name):
     app1_rms = np.sqrt(np.mean(app1_data**2)) if len(app1_data) > 0 else 0
     app2_rms = np.sqrt(np.mean(app2_data**2)) if len(app2_data) > 0 else 0
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"  app1 (call) frames:   {len(app1_frames)} chunks, RMS={app1_rms:.6f}")
     print(f"  app2 (voice typing) frames: {len(app2_frames)} chunks, RMS={app2_rms:.6f}")
 

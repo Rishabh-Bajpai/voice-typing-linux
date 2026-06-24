@@ -422,6 +422,8 @@ class VoiceDictationApp:
             with open(file_path, "rb") as f:
                 files = {"file": (os.path.basename(file_path), f, "audio/wav")}
                 data = {"model": STT_MODEL}
+                if self.wake_word:
+                    data["prompt"] = self.wake_word
                 response = requests.post(
                     STT_ENDPOINT, files=files, data=data, timeout=300
                 )
@@ -1089,6 +1091,8 @@ class VoiceDictationApp:
             with open(test_file, "rb") as f:
                 files = {"file": ("stt_test.wav", f, "audio/wav")}
                 data = {"model": STT_MODEL}
+                if self.wake_word:
+                    data["prompt"] = self.wake_word
                 resp = requests.post(STT_ENDPOINT, files=files, data=data, timeout=30)
                 elapsed = time.time() - start
                 resp.raise_for_status()

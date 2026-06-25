@@ -918,7 +918,7 @@ class VoiceDictationApp:
             except Exception:
                 pass
 
-        if main_key:
+        if main_key and self.push_to_hold:
             main_key_lower = main_key.lower()
             def release_listen():
                 def on_release(key):
@@ -947,6 +947,11 @@ class VoiceDictationApp:
                 self._push_to_hold_start()
         else:
             self.toggle_recording()
+        try:
+            subprocess.run(["xdotool", "key", "--clearmodifiers", "BackSpace"],
+                          capture_output=True, timeout=1)
+        except Exception:
+            pass
 
     def stop_service(self):
         with self._lock:

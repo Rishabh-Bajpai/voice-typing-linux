@@ -9,7 +9,7 @@ python app.py          # served at http://127.0.0.1:3221
 
 ## Key Commands
 - **Run**: `python app.py` (Flask + hotkey daemon + system tray subprocess)
-- **Tests**: `PYTHONPATH=. pytest -q --ignore=test_concurrent_mic.py` (47 tests, all mocking hardware/network)
+- **Tests**: `PYTHONPATH=. pytest -q` (47 tests, all mocking hardware/network)
 - **Lint**: `ruff check .`
 - **Single test**: `PYTHONPATH=. pytest tests/test_voice_edge_cases.py::test_name -q`
 

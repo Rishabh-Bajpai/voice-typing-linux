@@ -53,6 +53,7 @@ def test_update_config_hotkey_change_restarts_when_running(vd, monkeypatch):
 def test_transcribe_success_sends_model_payload(vd, tmp_path, monkeypatch):
     app = vd.VoiceDictationApp()
     app.wake_word = "chanakya"
+    app.initial_prompt = ""
     vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
     vd.STT_MODEL = "generic-model"
 

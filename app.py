@@ -492,6 +492,99 @@ HTML_TEMPLATE = """
             transform: none;
             cursor: not-allowed;
         }
+
+        .chip-input {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            min-height: 60px;
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        .chip-input:focus-within {
+            border-color: var(--primary);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+        }
+
+        .chip-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            background: rgba(129, 140, 248, 0.15);
+            border: 1px solid rgba(129, 140, 248, 0.3);
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            color: var(--text);
+            animation: chipIn 0.15s ease-out;
+        }
+
+        @keyframes chipIn {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .chip-remove {
+            cursor: pointer;
+            color: var(--text-dim);
+            font-size: 0.95rem;
+            line-height: 1;
+            padding: 0;
+            background: none;
+            border: none;
+            transition: color 0.15s;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .chip-remove:hover {
+            color: var(--danger);
+        }
+
+        #chipInput {
+            border: none;
+            background: transparent;
+            padding: 0.4rem 0.5rem;
+            font-size: 0.95rem;
+            color: var(--text);
+            outline: none;
+            font-family: inherit;
+            flex: 1;
+            min-width: 120px;
+        }
+
+        #chipInput::placeholder {
+            color: var(--text-dim);
+            opacity: 0.5;
+        }
+
+        .prompt-counter {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-align: right;
+            margin-top: 0.25rem;
+            transition: color 0.2s;
+        }
+
+        .prompt-counter.warning {
+            color: #f59e0b;
+        }
+
+        .prompt-counter.danger {
+            color: var(--danger);
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -595,6 +688,14 @@ HTML_TEMPLATE = """
                     <label>Command URL</label>
                     <input type="text" id="commandUrl" value="{{ command_url }}" placeholder="https://ntfy.example.org/" onchange="autoSave()">
                 </div>
+                <div class="input-group">
+                    <label>Initial Prompt</label>
+                    <div class="chip-input" id="chipContainer">
+                        <div class="chip-list" id="chipList"></div>
+                        <input type="text" id="chipInput" placeholder="Type a word and press Enter" autocomplete="off">
+                    </div>
+                    <div class="prompt-counter" id="promptCounter">0 / 800 characters</div>
+                </div>
 
                 <div class="input-group full-width" style="grid-column:span 2;display:flex;gap:1rem;">
                     <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
@@ -677,6 +778,78 @@ HTML_TEMPLATE = """
         let isRunning = false;
         let isRecording = false;
         let lastLoggedText = "";
+        let initialPromptWords = [];
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        function renderChips() {
+            const list = document.getElementById('chipList');
+            list.innerHTML = initialPromptWords.map((w, i) =>
+                `<span class="chip">${escapeHtml(w)} <button class="chip-remove" onclick="removeChip(${i})" type="button">×</button></span>`
+            ).join('');
+        }
+
+        function addChip(word) {
+            word = word.trim().replace(/,/g, '');
+            if (!word) return;
+            initialPromptWords.push(word);
+            renderChips();
+            updatePromptCharCount();
+            autoSave();
+        }
+
+        function removeChip(index) {
+            initialPromptWords.splice(index, 1);
+            renderChips();
+            updatePromptCharCount();
+            autoSave();
+        }
+
+        function updatePromptCharCount() {
+            const text = initialPromptWords.join(', ');
+            const count = text.length;
+            const el = document.getElementById('promptCounter');
+            el.textContent = count + ' / 800 characters';
+            el.classList.toggle('warning', count > 650 && count <= 800);
+            el.classList.toggle('danger', count > 800);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const chipInput = document.getElementById('chipInput');
+            if (!chipInput) return;
+
+            chipInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    const val = this.value;
+                    if (e.key === ',') {
+                        const parts = val.split(',');
+                        parts.forEach(p => { const t = p.trim(); if (t) addChip(t); });
+                    } else if (val.trim()) {
+                        addChip(val);
+                    }
+                    this.value = '';
+                }
+                if (e.key === 'Backspace' && this.value === '' && initialPromptWords.length > 0) {
+                    removeChip(initialPromptWords.length - 1);
+                }
+            });
+
+            chipInput.addEventListener('paste', function() {
+                setTimeout(() => {
+                    const val = this.value;
+                    if (val.includes(',')) {
+                        const parts = val.split(',');
+                        parts.forEach(p => { const t = p.trim(); if (t) addChip(t); });
+                        this.value = '';
+                    }
+                }, 10);
+            });
+        });
 
         async function loadDevices() {
             try {
@@ -780,6 +953,7 @@ HTML_TEMPLATE = """
                 clipboard_mode: document.getElementById('clipboardMode').checked,
                 wake_word: document.getElementById('wakeWord').value,
                 command_url: document.getElementById('commandUrl').value,
+                initial_prompt: initialPromptWords.join(', '),
             };
 
             await fetch('/settings', {
@@ -961,6 +1135,9 @@ HTML_TEMPLATE = """
                 document.getElementById('llmCustomPrompt').value = (data.llm_action === 'custom' ? data.llm_instruction : '') || '';
                 document.getElementById('wakeWord').value = data.wake_word || 'chanakya';
                 document.getElementById('commandUrl').value = data.command_url || '';
+                initialPromptWords = (data.initial_prompt || '').split(',').map(w => w.trim()).filter(w => w);
+                renderChips();
+                updatePromptCharCount();
                 onLlmActionChange();
             } catch (e) {}
         }
@@ -1010,6 +1187,7 @@ def index():
         clipboard_mode=dict_app.clipboard_mode,
         wake_word=voice_dictation.WAKE_WORD,
         command_url=voice_dictation.COMMAND_URL,
+        initial_prompt=voice_dictation.INITIAL_PROMPT,
     )
 
 
@@ -1036,6 +1214,7 @@ def save_settings():
         llm_instruction=data.get("llm_instruction"),
         wake_word=data.get("wake_word"),
         command_url=data.get("command_url"),
+        initial_prompt=data.get("initial_prompt"),
     )
     return jsonify({"success": True})
 
@@ -1125,6 +1304,7 @@ def llm_config():
         "clipboard_mode": dict_app.clipboard_mode,
         "wake_word": dict_app.wake_word,
         "command_url": dict_app.command_url,
+        "initial_prompt": dict_app.initial_prompt,
     })
 
 

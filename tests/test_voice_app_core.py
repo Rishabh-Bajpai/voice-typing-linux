@@ -52,6 +52,7 @@ def test_update_config_hotkey_change_restarts_when_running(vd, monkeypatch):
 
 def test_transcribe_success_sends_model_payload(vd, tmp_path, monkeypatch):
     app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
     vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
     vd.STT_MODEL = "generic-model"
 
@@ -91,6 +92,61 @@ def test_transcribe_failure_returns_none(vd, tmp_path, monkeypatch):
         vd.requests, "post", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
     )
     assert app.transcribe(str(audio)) is None
+
+
+def test_transcribe_initial_prompt_included(vd, tmp_path, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.initial_prompt = "Transcribe these terms: Kubernetes, gRPC"
+    vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
+    vd.STT_MODEL = "generic-model"
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"fake-wav")
+    captured = {}
+
+    class Resp:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"text": "hello world"}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return Resp()
+
+    monkeypatch.setattr(vd.requests, "post", fake_post)
+    app.transcribe(str(audio))
+
+    assert captured["data"]["prompt"] == "chanakya, Transcribe these terms: Kubernetes, gRPC"
+
+
+def test_transcribe_initial_prompt_truncation(vd, tmp_path, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.initial_prompt = "word, " * 500
+    vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
+    vd.STT_MODEL = "generic-model"
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"fake-wav")
+    captured = {}
+
+    class Resp:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"text": "hello world"}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return Resp()
+
+    monkeypatch.setattr(vd.requests, "post", fake_post)
+    app.transcribe(str(audio))
+
+    assert len(captured["data"]["prompt"]) <= vd.MAX_PROMPT_CHARS
+    assert captured["data"]["prompt"].startswith("...")
 
 
 def test_type_text_falls_back_to_controller_when_xdotool_fails(vd, monkeypatch):

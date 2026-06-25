@@ -293,6 +293,7 @@ def test_backspace_fallback_to_pynput(vd, monkeypatch):
 
 def test_type_text_does_not_append_history(vd, monkeypatch):
     app = vd.VoiceDictationApp()
+    app.transcription_history.clear()
     monkeypatch.setattr(vd.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
 
     app.type_text("hello")

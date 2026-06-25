@@ -59,6 +59,7 @@ def load_config():
         "CLIPBOARD_MODE": True,
         "WAKE_WORD": "chanakya",
         "COMMAND_URL": "",
+        "INITIAL_PROMPT": "",
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -101,6 +102,8 @@ LLM_ACTION = CONFIG["LLM_ACTION"]
 LLM_INSTRUCTION = CONFIG["LLM_INSTRUCTION"]
 WAKE_WORD = CONFIG["WAKE_WORD"]
 COMMAND_URL = CONFIG["COMMAND_URL"]
+INITIAL_PROMPT = CONFIG["INITIAL_PROMPT"]
+MAX_PROMPT_CHARS = 800
 
 def _load_dotenv():
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -373,6 +376,7 @@ class VoiceDictationApp:
         self.push_to_hold = PUSH_TO_HOLD
         self.wake_word = WAKE_WORD
         self.command_url = COMMAND_URL
+        self.initial_prompt = INITIAL_PROMPT
         self.clipboard_mode = CLIPBOARD_MODE
         self._hotkey_pressed = False
         self._pth_timer = None
@@ -422,8 +426,17 @@ class VoiceDictationApp:
             with open(file_path, "rb") as f:
                 files = {"file": (os.path.basename(file_path), f, "audio/wav")}
                 data = {"model": STT_MODEL}
+                parts = []
                 if self.wake_word:
-                    data["prompt"] = self.wake_word
+                    parts.append(self.wake_word)
+                if self.initial_prompt:
+                    parts.append(self.initial_prompt.strip())
+                if parts:
+                    prompt = ", ".join(parts)
+                    if len(prompt) > MAX_PROMPT_CHARS:
+                        prompt = "..." + prompt[-(MAX_PROMPT_CHARS - 3):]
+                        print(f"[PROMPT] Truncated to {MAX_PROMPT_CHARS} chars", flush=True)
+                    data["prompt"] = prompt
                 response = requests.post(
                     STT_ENDPOINT, files=files, data=data, timeout=300
                 )
@@ -620,11 +633,12 @@ class VoiceDictationApp:
         llm_instruction=None,
         wake_word=None,
         command_url=None,
+        initial_prompt=None,
     ):
         global STT_ENDPOINT, STT_MODEL, STREAMING_MODE, HOTKEY_STR
         global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED, PULSE_SOURCE_NAME
         global PUSH_TO_HOLD, CLIPBOARD_MODE, LLM_ACTION, LLM_INSTRUCTION
-        global WAKE_WORD, COMMAND_URL
+        global WAKE_WORD, COMMAND_URL, INITIAL_PROMPT
 
         need_hotkey_restart = False
 
@@ -681,6 +695,10 @@ class VoiceDictationApp:
             if command_url is not None:
                 COMMAND_URL = command_url.strip()
                 self.command_url = COMMAND_URL
+
+            if initial_prompt is not None:
+                INITIAL_PROMPT = initial_prompt.strip()
+                self.initial_prompt = INITIAL_PROMPT
 
         if need_hotkey_restart and self.is_running:
             if self.is_recording:
@@ -1091,8 +1109,17 @@ class VoiceDictationApp:
             with open(test_file, "rb") as f:
                 files = {"file": ("stt_test.wav", f, "audio/wav")}
                 data = {"model": STT_MODEL}
+                parts = []
                 if self.wake_word:
-                    data["prompt"] = self.wake_word
+                    parts.append(self.wake_word)
+                if self.initial_prompt:
+                    parts.append(self.initial_prompt.strip())
+                if parts:
+                    prompt = ", ".join(parts)
+                    if len(prompt) > MAX_PROMPT_CHARS:
+                        prompt = "..." + prompt[-(MAX_PROMPT_CHARS - 3):]
+                        print(f"[PROMPT] Truncated to {MAX_PROMPT_CHARS} chars", flush=True)
+                    data["prompt"] = prompt
                 resp = requests.post(STT_ENDPOINT, files=files, data=data, timeout=30)
                 elapsed = time.time() - start
                 resp.raise_for_status()

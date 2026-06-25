@@ -397,6 +397,12 @@ HTML_TEMPLATE = """
             padding: 0.5rem 1rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.04);
             font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .history-entry:hover {
+            background: rgba(255, 255, 255, 0.03);
         }
 
         .history-entry:last-child {
@@ -428,6 +434,41 @@ HTML_TEMPLATE = """
         .history-dot.streaming { background: var(--primary); }
         .history-dot.batch { background: var(--accent); }
         .history-dot.command { background: #f59e0b; }
+
+        .copy-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-dim);
+            padding: 0.1rem 0.3rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            opacity: 0;
+            transition: opacity 0.15s, color 0.2s, transform 0.15s;
+            flex-shrink: 0;
+            margin-left: auto;
+            align-self: center;
+            line-height: 1;
+        }
+
+        .history-entry:hover .copy-btn {
+            opacity: 0.6;
+        }
+
+        .copy-btn.visible {
+            opacity: 0.6;
+        }
+
+        .copy-btn:hover {
+            opacity: 1 !important;
+            color: var(--primary);
+            transform: scale(1.1);
+        }
+
+        .copy-btn.copied {
+            color: var(--success) !important;
+            opacity: 1 !important;
+        }
 
         .stt-test-area {
             display: grid;
@@ -1075,14 +1116,30 @@ HTML_TEMPLATE = """
                     body.innerHTML = '<div class="history-entry" style="color:var(--text-dim);padding:1rem;text-align:center">No transcriptions yet</div>';
                     return;
                 }
-                body.innerHTML = entries.slice().reverse().map(e =>
-                    '<div class="history-entry">' +
+                body.innerHTML = entries.slice().reverse().map((e, i) =>
+                    '<div class="history-entry" onclick="copyHistoryText(this)">' +
                     '<span class="history-dot ' + e.source + '"></span>' +
                     '<span class="history-time">' + e.time + '</span>' +
                     '<span class="history-text">' + escapeHtml(e.text) + '</span>' +
+                    '<button class="copy-btn' + (i === 0 ? ' visible' : '') + '" onclick="event.stopPropagation(); copyHistoryText(this.parentElement)" title="Copy text">📋</button>' +
                     '</div>'
                 ).join('');
             } catch (e) {}
+        }
+
+        function copyHistoryText(entry) {
+            const text = entry.querySelector('.history-text').textContent;
+            const btn = entry.querySelector('.copy-btn');
+            navigator.clipboard.writeText(text).then(() => {
+                if (btn) {
+                    btn.textContent = '✓';
+                    btn.classList.add('copied');
+                    setTimeout(() => {
+                        btn.textContent = '📋';
+                        btn.classList.remove('copied');
+                    }, 1500);
+                }
+            }).catch(() => {});
         }
 
         function escapeHtml(str) {

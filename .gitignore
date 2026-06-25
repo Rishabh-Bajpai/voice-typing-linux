@@ -27,3 +27,6 @@ dist/
 
 # Playwright browser testing artifacts
 .playwright-mcp/
+
+# Desktop entry (contains absolute path)
+*.desktop

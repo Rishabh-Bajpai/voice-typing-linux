@@ -55,3 +55,31 @@ def test_save_config_writes_json(vd, tmp_path, monkeypatch):
 
     saved = json.loads(cfg_path.read_text())
     assert saved == payload
+
+
+def test_load_config_has_push_to_hold_and_clipboard_defaults(vd):
+    cfg = vd.load_config()
+    assert "PUSH_TO_HOLD" in cfg
+    assert cfg["PUSH_TO_HOLD"] is False
+    assert "CLIPBOARD_MODE" in cfg
+    assert cfg["CLIPBOARD_MODE"] is True
+
+
+def test_load_config_merges_push_to_hold_from_file(vd, tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(
+        json.dumps({"PUSH_TO_HOLD": True, "CLIPBOARD_MODE": False})
+    )
+    monkeypatch.setattr(vd, "CONFIG_FILE", str(cfg_path))
+
+    cfg = vd.load_config()
+    assert cfg["PUSH_TO_HOLD"] is True
+    assert cfg["CLIPBOARD_MODE"] is False
+
+
+def test_app_loads_push_to_hold_and_clipboard_from_globals(vd, monkeypatch):
+    monkeypatch.setattr(vd, "PUSH_TO_HOLD", True)
+    monkeypatch.setattr(vd, "CLIPBOARD_MODE", False)
+    app = vd.VoiceDictationApp()
+    assert app.push_to_hold is True
+    assert app.clipboard_mode is False

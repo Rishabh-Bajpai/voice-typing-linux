@@ -1,6 +1,7 @@
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template_string, Response
 from flask_cors import CORS
 import os
+import subprocess
 import voice_dictation
 from voice_dictation import VoiceDictationApp
 
@@ -396,6 +397,12 @@ HTML_TEMPLATE = """
             padding: 0.5rem 1rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.04);
             font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .history-entry:hover {
+            background: rgba(255, 255, 255, 0.03);
         }
 
         .history-entry:last-child {
@@ -426,6 +433,42 @@ HTML_TEMPLATE = """
 
         .history-dot.streaming { background: var(--primary); }
         .history-dot.batch { background: var(--accent); }
+        .history-dot.command { background: #f59e0b; }
+
+        .copy-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-dim);
+            padding: 0.1rem 0.3rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            opacity: 0;
+            transition: opacity 0.15s, color 0.2s, transform 0.15s;
+            flex-shrink: 0;
+            margin-left: auto;
+            align-self: center;
+            line-height: 1;
+        }
+
+        .history-entry:hover .copy-btn {
+            opacity: 0.6;
+        }
+
+        .copy-btn.visible {
+            opacity: 0.6;
+        }
+
+        .copy-btn:hover {
+            opacity: 1 !important;
+            color: var(--primary);
+            transform: scale(1.1);
+        }
+
+        .copy-btn.copied {
+            color: var(--success) !important;
+            opacity: 1 !important;
+        }
 
         .stt-test-area {
             display: grid;
@@ -490,6 +533,99 @@ HTML_TEMPLATE = """
             transform: none;
             cursor: not-allowed;
         }
+
+        .chip-input {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            min-height: 60px;
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        .chip-input:focus-within {
+            border-color: var(--primary);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2);
+        }
+
+        .chip-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            background: rgba(129, 140, 248, 0.15);
+            border: 1px solid rgba(129, 140, 248, 0.3);
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            color: var(--text);
+            animation: chipIn 0.15s ease-out;
+        }
+
+        @keyframes chipIn {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .chip-remove {
+            cursor: pointer;
+            color: var(--text-dim);
+            font-size: 0.95rem;
+            line-height: 1;
+            padding: 0;
+            background: none;
+            border: none;
+            transition: color 0.15s;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .chip-remove:hover {
+            color: var(--danger);
+        }
+
+        #chipInput {
+            border: none;
+            background: transparent;
+            padding: 0.4rem 0.5rem;
+            font-size: 0.95rem;
+            color: var(--text);
+            outline: none;
+            font-family: inherit;
+            flex: 1;
+            min-width: 120px;
+        }
+
+        #chipInput::placeholder {
+            color: var(--text-dim);
+            opacity: 0.5;
+        }
+
+        .prompt-counter {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-align: right;
+            margin-top: 0.25rem;
+            transition: color 0.2s;
+        }
+
+        .prompt-counter.warning {
+            color: #f59e0b;
+        }
+
+        .prompt-counter.danger {
+            color: var(--danger);
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -504,6 +640,8 @@ HTML_TEMPLATE = """
                 <div id="statusBadge" class="status-badge status-off">
                     <span id="statusText">Disconnected</span>
                 </div>
+                <button onclick="restartHotkey()" id="hkBtn" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.7rem;padding:0.25rem 0.5rem;border-radius:6px;margin-left:0.5rem;" title="Reconnect hotkey after login/sleep">⌨️ Reset</button>
+                <button onclick="reinitAudio()" id="reinitBtn" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:0.7rem;padding:0.25rem 0.5rem;border-radius:6px;" title="Reset audio device (fixes mic stuck after call)">🎤 Reinit</button>
             </div>
 
             <div class="form-section">
@@ -549,6 +687,65 @@ HTML_TEMPLATE = """
                         <option value="0" {% if not beep_enabled %}selected{% endif %}>Muted</option>
                     </select>
                 </div>
+
+                <div class="input-group full-width batch-notice" id="llmNotice" style="display:none;padding:0.6rem 1rem;background:rgba(251,191,36,0.1);border:1px solid rgba(251,191,36,0.2);border-radius:10px;color:#fbbf24;font-size:0.8rem;text-align:center;">
+                    LLM features require <strong>Batch mode</strong>. Switch above to enable.
+                </div>
+
+                <div class="input-group" id="llmActionGroup">
+                    <label>LLM Post-Process</label>
+                    <select id="llmAction" onchange="onLlmActionChange()">
+                        <option value="off">Off</option>
+                        <option value="grammar">Grammar Fix</option>
+                        <option value="translate">Translate</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                </div>
+
+                <div class="input-group" id="llmLangGroup" style="display:none">
+                    <label>Translate Language</label>
+                    <select id="llmLang" onchange="autoSave()">
+                        <option value="Hindi">Hindi</option>
+                        <option value="English">English</option>
+                        <option value="French">French</option>
+                        <option value="Spanish">Spanish</option>
+                        <option value="German">German</option>
+                        <option value="Japanese">Japanese</option>
+                        <option value="Chinese">Chinese</option>
+                        <option value="Arabic">Arabic</option>
+                    </select>
+                </div>
+
+                <div class="input-group" id="llmCustomGroup" style="display:none">
+                    <label>Custom Prompt</label>
+                    <input type="text" id="llmCustomPrompt" placeholder="e.g. Convert to bullet points" onchange="autoSave()">
+                </div>
+
+                <div class="input-group">
+                    <label>Wake Word</label>
+                    <input type="text" id="wakeWord" value="{{ wake_word }}" placeholder="chanakya" onchange="autoSave()">
+                </div>
+                <div class="input-group">
+                    <label>Command URL</label>
+                    <input type="text" id="commandUrl" value="{{ command_url }}" placeholder="https://ntfy.example.org/" onchange="autoSave()">
+                </div>
+                <div class="input-group">
+                    <label>Initial Prompt</label>
+                    <div class="chip-input" id="chipContainer">
+                        <div class="chip-list" id="chipList"></div>
+                        <input type="text" id="chipInput" placeholder="Type a word and press Enter" autocomplete="off">
+                    </div>
+                    <div class="prompt-counter" id="promptCounter">0 / 800 characters</div>
+                </div>
+
+                <div class="input-group full-width" style="grid-column:span 2;display:flex;gap:1rem;">
+                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                        <input type="checkbox" id="pushToHold" onchange="autoSave()" {% if push_to_hold %}checked{% endif %}> Push-to-Hold
+                    </label>
+                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                        <input type="checkbox" id="clipboardMode" onchange="autoSave()" {% if clipboard_mode %}checked{% endif %}> Type into document
+                    </label>
+                </div>
             </div>
 
             <div class="controls">
@@ -556,6 +753,14 @@ HTML_TEMPLATE = """
                 <button onclick="toggleRecording()" class="btn-secondary" id="recBtn">Manual Dictate</button>
                 <button onclick="toggleMicTest()" class="btn-secondary" id="micTestBtn">Test Mic</button>
             </div>
+
+            <div class="preview-box" id="previewBox" style="display:none;margin-top:1rem;padding:0.75rem 1rem;background:rgba(0,0,0,0.25);border-radius:12px;border:1px solid var(--border);font-size:0.9rem;min-height:1.2rem;">
+                <span id="previewText" style="color:var(--primary);"></span>
+                <span id="previewCursor" style="animation:blink 1s step-end infinite;">▊</span>
+            </div>
+            <style>
+                @keyframes blink { 50% { opacity: 0; } }
+            </style>
 
             <div class="mic-meter" id="micMeter">
                 <div class="meter-header">
@@ -594,7 +799,11 @@ HTML_TEMPLATE = """
 
             <div class="section-header" onclick="toggleHistory()">
                 <span class="label">Transcription History</span>
-                <span><span class="count" id="historyCount">0</span> <span class="chevron" id="historyChevron">▶</span></span>
+                <span>
+                    <a href="/export_history?format=txt" style="color:var(--text-dim);font-size:0.75rem;text-decoration:none;margin-right:0.5rem;" title="Export as TXT" onclick="event.stopPropagation()">⬇ TXT</a>
+                    <a href="/export_history?format=md" style="color:var(--text-dim);font-size:0.75rem;text-decoration:none;margin-right:0.75rem;" title="Export as Markdown" onclick="event.stopPropagation()">⬇ MD</a>
+                    <span class="count" id="historyCount">0</span> <span class="chevron" id="historyChevron">▶</span>
+                </span>
             </div>
             <div class="section-body" id="historyBody">
                 <div class="history-entry" style="color:var(--text-dim);padding:1rem;text-align:center">No transcriptions yet</div>
@@ -610,6 +819,79 @@ HTML_TEMPLATE = """
         let isRunning = false;
         let isRecording = false;
         let lastLoggedText = "";
+        let initialPromptWords = [];
+        let configReady = false;
+
+        function escapeHtml(s) {
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        function renderChips() {
+            const list = document.getElementById('chipList');
+            list.innerHTML = initialPromptWords.map((w, i) =>
+                `<span class="chip">${escapeHtml(w)} <button class="chip-remove" onclick="removeChip(${i})" type="button">×</button></span>`
+            ).join('');
+        }
+
+        function addChip(word) {
+            word = word.trim().replace(/,/g, '');
+            if (!word) return;
+            initialPromptWords.push(word);
+            renderChips();
+            updatePromptCharCount();
+            autoSave();
+        }
+
+        function removeChip(index) {
+            initialPromptWords.splice(index, 1);
+            renderChips();
+            updatePromptCharCount();
+            autoSave();
+        }
+
+        function updatePromptCharCount() {
+            const text = initialPromptWords.join(', ');
+            const count = text.length;
+            const el = document.getElementById('promptCounter');
+            el.textContent = count + ' / 800 characters';
+            el.classList.toggle('warning', count > 650 && count <= 800);
+            el.classList.toggle('danger', count > 800);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const chipInput = document.getElementById('chipInput');
+            if (!chipInput) return;
+
+            chipInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    const val = this.value;
+                    if (e.key === ',') {
+                        const parts = val.split(',');
+                        parts.forEach(p => { const t = p.trim(); if (t) addChip(t); });
+                    } else if (val.trim()) {
+                        addChip(val);
+                    }
+                    this.value = '';
+                }
+                if (e.key === 'Backspace' && this.value === '' && initialPromptWords.length > 0) {
+                    removeChip(initialPromptWords.length - 1);
+                }
+            });
+
+            chipInput.addEventListener('paste', function() {
+                setTimeout(() => {
+                    const val = this.value;
+                    if (val.includes(',')) {
+                        const parts = val.split(',');
+                        parts.forEach(p => { const t = p.trim(); if (t) addChip(t); });
+                        this.value = '';
+                    }
+                }, 10);
+            });
+        });
 
         async function loadDevices() {
             try {
@@ -680,20 +962,41 @@ HTML_TEMPLATE = """
             container.prepend(entry);
         }
 
+        function getLlmInstruction() {
+            const action = document.getElementById('llmAction').value;
+            if (action === 'translate') return document.getElementById('llmLang').value;
+            if (action === 'custom') return document.getElementById('llmCustomPrompt').value;
+            return '';
+        }
+
+        function onLlmActionChange() {
+            const action = document.getElementById('llmAction').value;
+            document.getElementById('llmLangGroup').style.display = action === 'translate' ? '' : 'none';
+            document.getElementById('llmCustomGroup').style.display = action === 'custom' ? '' : 'none';
+            autoSave();
+        }
+
         async function autoSave() {
+            if (!configReady) return;
             const devSelect = document.getElementById('deviceSelect');
-            const devIdx = devSelect.value;
             const devOpt = devSelect.selectedOptions[0];
-            const pulseSource = devOpt ? devOpt.dataset.pulsesource || '' : '';
+            const pulseSource = devOpt ? devOpt.dataset.pulseSource || '' : '';
             const settings = {
                 stt_endpoint: document.getElementById('sttEndpoint').value,
                 stt_model: document.getElementById('sttModel').value,
                 hotkey: document.getElementById('hotkey').value,
                 streaming: document.getElementById('streamingMode').value === "1",
-                device_index: devIdx,
+                device_index: devSelect.value,
                 pulse_source: pulseSource,
                 silence_threshold: document.getElementById('silenceThreshold').value,
-                beep_enabled: document.getElementById('beepEnabled').value === "1"
+                beep_enabled: document.getElementById('beepEnabled').value === "1",
+                llm_action: document.getElementById('llmAction').value,
+                llm_instruction: getLlmInstruction(),
+                push_to_hold: document.getElementById('pushToHold').checked,
+                clipboard_mode: document.getElementById('clipboardMode').checked,
+                wake_word: document.getElementById('wakeWord').value,
+                command_url: document.getElementById('commandUrl').value,
+                initial_prompt: initialPromptWords.join(', '),
             };
 
             await fetch('/settings', {
@@ -715,6 +1018,21 @@ HTML_TEMPLATE = """
         async function toggleRecording() {
             await fetch('/toggle_recording', {method: 'POST'});
             updateStatus();
+        }
+
+        async function restartHotkey() {
+            const btn = document.getElementById('hkBtn');
+            btn.innerText = '⌨️ ...';
+            await fetch('/restart_hotkey', {method: 'POST'});
+            setTimeout(() => btn.innerText = '⌨️ Reset', 1000);
+        }
+
+        async function reinitAudio() {
+            const btn = document.getElementById('reinitBtn');
+            btn.innerText = '🎤 ...';
+            await fetch('/reinit_audio', {method: 'POST'});
+            await loadDevices();
+            setTimeout(() => btn.innerText = '🎤 Reinit', 1000);
         }
 
         let micTestActive = false;
@@ -800,14 +1118,30 @@ HTML_TEMPLATE = """
                     body.innerHTML = '<div class="history-entry" style="color:var(--text-dim);padding:1rem;text-align:center">No transcriptions yet</div>';
                     return;
                 }
-                body.innerHTML = entries.slice().reverse().map(e =>
-                    '<div class="history-entry">' +
+                body.innerHTML = entries.slice().reverse().map((e, i) =>
+                    '<div class="history-entry" onclick="copyHistoryText(this)">' +
                     '<span class="history-dot ' + e.source + '"></span>' +
                     '<span class="history-time">' + e.time + '</span>' +
                     '<span class="history-text">' + escapeHtml(e.text) + '</span>' +
+                    '<button class="copy-btn' + (i === 0 ? ' visible' : '') + '" onclick="event.stopPropagation(); copyHistoryText(this.parentElement)" title="Copy text">📋</button>' +
                     '</div>'
                 ).join('');
             } catch (e) {}
+        }
+
+        function copyHistoryText(entry) {
+            const text = entry.querySelector('.history-text').textContent;
+            const btn = entry.querySelector('.copy-btn');
+            navigator.clipboard.writeText(text).then(() => {
+                if (btn) {
+                    btn.textContent = '✓';
+                    btn.classList.add('copied');
+                    setTimeout(() => {
+                        btn.textContent = '📋';
+                        btn.classList.remove('copied');
+                    }, 1500);
+                }
+            }).catch(() => {});
         }
 
         function escapeHtml(str) {
@@ -846,9 +1180,50 @@ HTML_TEMPLATE = """
             btn.innerText = 'Test STT Endpoint';
         }
 
+        async function loadLlmConfig() {
+            try {
+                const res = await fetch('/llm_config');
+                const data = await res.json();
+                document.getElementById('llmAction').value = data.llm_action || 'off';
+                document.getElementById('pushToHold').checked = data.push_to_hold || false;
+                document.getElementById('clipboardMode').checked = data.clipboard_mode !== false;
+                const langSel = document.getElementById('llmLang');
+                if (data.llm_instruction && langSel.querySelector('option[value="' + data.llm_instruction + '"]')) {
+                    langSel.value = data.llm_instruction;
+                }
+                document.getElementById('llmCustomPrompt').value = (data.llm_action === 'custom' ? data.llm_instruction : '') || '';
+                document.getElementById('wakeWord').value = data.wake_word || 'chanakya';
+                document.getElementById('commandUrl').value = data.command_url || '';
+                initialPromptWords = (data.initial_prompt || '').split(',').map(w => w.trim()).filter(w => w);
+                renderChips();
+                updatePromptCharCount();
+                onLlmActionChange();
+                configReady = true;
+            } catch (e) { configReady = true; }
+        }
+
+        let lastPreviewText = '';
+
+        async function updatePreview() {
+            try {
+                const res = await fetch('/status');
+                const data = await res.json();
+                const box = document.getElementById('previewBox');
+                const el = document.getElementById('previewText');
+                if (data.is_recording && data.last_text && data.last_text !== lastPreviewText) {
+                    box.style.display = 'block';
+                    el.innerText = data.last_text;
+                    lastPreviewText = data.last_text;
+                    box.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+                }
+            } catch (e) {}
+        }
+
+        loadLlmConfig().then ? null : null;
         loadDevices();
         setInterval(updateStatus, 1000);
         setInterval(updateHistory, 2000);
+        setInterval(updatePreview, 500);
         updateStatus();
         updateHistory();
     </script>
@@ -868,6 +1243,11 @@ def index():
         active_device=voice_dictation.DEVICE_INDEX,
         silence_threshold=voice_dictation.SILENCE_THRESHOLD,
         beep_enabled=voice_dictation.BEEP_ENABLED,
+        push_to_hold=dict_app.push_to_hold,
+        clipboard_mode=dict_app.clipboard_mode,
+        wake_word=voice_dictation.WAKE_WORD,
+        command_url=voice_dictation.COMMAND_URL,
+        initial_prompt=voice_dictation.INITIAL_PROMPT,
     )
 
 
@@ -888,6 +1268,13 @@ def save_settings():
         silence_threshold=data.get("silence_threshold"),
         beep_enabled=data.get("beep_enabled"),
         pulse_source=data.get("pulse_source"),
+        push_to_hold=data.get("push_to_hold"),
+        clipboard_mode=data.get("clipboard_mode"),
+        llm_action=data.get("llm_action"),
+        llm_instruction=data.get("llm_instruction"),
+        wake_word=data.get("wake_word"),
+        command_url=data.get("command_url"),
+        initial_prompt=data.get("initial_prompt"),
     )
     return jsonify({"success": True})
 
@@ -953,6 +1340,76 @@ def test_stt():
     return jsonify(dict_app.test_stt_endpoint())
 
 
+@app.route("/llm_config", methods=["GET", "POST"])
+def llm_config():
+    if request.method == "POST":
+        data = request.json
+        import voice_dictation as vd
+        vd.OPENAI_BASE_URL = data.get("openai_base_url", vd.OPENAI_BASE_URL)
+        vd.OPENAI_CHAT_MODEL_ID = data.get("openai_chat_model_id", vd.OPENAI_CHAT_MODEL_ID)
+        vd.OPENAI_API_KEY = data.get("openai_api_key", vd.OPENAI_API_KEY)
+        dict_app.llm_action = data.get("llm_action", dict_app.llm_action)
+        dict_app.llm_instruction = data.get("llm_instruction", dict_app.llm_instruction)
+        dict_app.push_to_hold = data.get("push_to_hold", dict_app.push_to_hold)
+        dict_app.clipboard_mode = data.get("clipboard_mode", dict_app.clipboard_mode)
+        return jsonify({"success": True})
+    import voice_dictation as vd
+    return jsonify({
+        "openai_base_url": vd.OPENAI_BASE_URL,
+        "openai_chat_model_id": vd.OPENAI_CHAT_MODEL_ID,
+        "llm_action": dict_app.llm_action,
+        "llm_instruction": dict_app.llm_instruction,
+        "push_to_hold": dict_app.push_to_hold,
+        "clipboard_mode": dict_app.clipboard_mode,
+        "wake_word": dict_app.wake_word,
+        "command_url": dict_app.command_url,
+        "initial_prompt": dict_app.initial_prompt,
+    })
+
+
+@app.route("/export_history")
+def export_history():
+    fmt = request.args.get("format", "txt")
+    lines = [f"[{e['time']}] {e['text']}" for e in dict_app.transcription_history]
+    text = "\n".join(lines) if lines else "No transcriptions yet."
+    ext = "txt"
+    if fmt == "md":
+        text = "# Transcription History\n\n" + "\n".join(
+            f"- **{e['time']}** {e['text']}" for e in dict_app.transcription_history
+        )
+        ext = "md"
+    return Response(
+        text,
+        mimetype="text/plain",
+        headers={"Content-Disposition": f"attachment; filename=transcriptions.{ext}"},
+    )
+
+
+@app.route("/restart_hotkey", methods=["POST"])
+def restart_hotkey():
+    dict_app.restart_hotkey()
+    return jsonify({"success": True})
+
+
+@app.route("/reinit_audio", methods=["POST"])
+def reinit_audio():
+    dict_app.reinit_audio()
+    return jsonify({"success": True})
+
+
 if __name__ == "__main__":
     dict_app.start_service()
+    try:
+        _tray_env = os.environ.copy()
+        for _k in ("DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"):
+            if _k not in _tray_env:
+                _tray_env[_k] = ""
+        subprocess.Popen(
+            ["/usr/bin/python3", os.path.join(os.path.dirname(__file__), "tray.py")],
+            env=_tray_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
     app.run(host=_ui_host, port=_ui_port)

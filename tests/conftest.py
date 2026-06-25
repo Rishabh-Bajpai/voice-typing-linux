@@ -75,6 +75,13 @@ def fake_external_modules(monkeypatch):
     pynput_mod = types.ModuleType("pynput")
     keyboard_mod = types.ModuleType("pynput.keyboard")
 
+    class Key:
+        ctrl = object()
+        cmd = object()
+        alt = object()
+        shift = object()
+        backspace = object()
+
     class FakeGlobalHotKeys:
         def __init__(self, mapping):
             self.mapping = mapping
@@ -98,6 +105,26 @@ def fake_external_modules(monkeypatch):
         def type(self, text):
             self.__class__.typed_text.append(text)
 
+    class FakeListener:
+        def __init__(self, on_press=None, on_release=None):
+            self.on_press = on_press
+            self.on_release = on_release
+            self._stopped = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def join(self):
+            return None
+
+        def stop(self):
+            self._stopped = True
+
+    keyboard_mod.Key = Key
+    keyboard_mod.Listener = FakeListener
     keyboard_mod.GlobalHotKeys = FakeGlobalHotKeys
     keyboard_mod.Controller = FakeController
     pynput_mod.keyboard = keyboard_mod
@@ -119,6 +146,9 @@ def clear_voice_typing_env(monkeypatch):
         "VOICE_TYPING_HOTKEY",
         "VOICE_TYPING_UI_HOST",
         "VOICE_TYPING_UI_PORT",
+        "VOICE_TYPING_WAKE_WORD",
+        "VOICE_TYPING_COMMAND_URL",
+        "VOICE_TYPING_PULSE_SOURCE",
     ]
     for key in keys:
         monkeypatch.delenv(key, raising=False)
@@ -130,4 +160,5 @@ def vd(tmp_path, monkeypatch):
 
     module = importlib.reload(voice_dictation)
     monkeypatch.setattr(module, "CONFIG_FILE", str(tmp_path / "config.json"))
+    monkeypatch.setattr(module, "HISTORY_FILE", str(tmp_path / "history.json"))
     return module

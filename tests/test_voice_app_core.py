@@ -52,6 +52,8 @@ def test_update_config_hotkey_change_restarts_when_running(vd, monkeypatch):
 
 def test_transcribe_success_sends_model_payload(vd, tmp_path, monkeypatch):
     app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.initial_prompt = ""
     vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
     vd.STT_MODEL = "generic-model"
 
@@ -78,8 +80,8 @@ def test_transcribe_success_sends_model_payload(vd, tmp_path, monkeypatch):
 
     assert text == "hello world"
     assert captured["url"].startswith("http://localhost:1234")
-    assert captured["data"] == {"model": "generic-model"}
-    assert captured["timeout"] == 30
+    assert captured["data"] == {"model": "generic-model", "prompt": "chanakya"}
+    assert captured["timeout"] == 300
     assert captured["filename"] == "clip.wav"
 
 
@@ -93,17 +95,81 @@ def test_transcribe_failure_returns_none(vd, tmp_path, monkeypatch):
     assert app.transcribe(str(audio)) is None
 
 
+def test_transcribe_initial_prompt_included(vd, tmp_path, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.initial_prompt = "Transcribe these terms: Kubernetes, gRPC"
+    vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
+    vd.STT_MODEL = "generic-model"
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"fake-wav")
+    captured = {}
+
+    class Resp:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"text": "hello world"}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return Resp()
+
+    monkeypatch.setattr(vd.requests, "post", fake_post)
+    app.transcribe(str(audio))
+
+    assert captured["data"]["prompt"] == "chanakya, Transcribe these terms: Kubernetes, gRPC"
+
+
+def test_transcribe_initial_prompt_truncation(vd, tmp_path, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.initial_prompt = "word, " * 500
+    vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
+    vd.STT_MODEL = "generic-model"
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"fake-wav")
+    captured = {}
+
+    class Resp:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"text": "hello world"}
+
+    def fake_post(url, files, data, timeout):
+        captured["data"] = data
+        return Resp()
+
+    monkeypatch.setattr(vd.requests, "post", fake_post)
+    app.transcribe(str(audio))
+
+    assert len(captured["data"]["prompt"]) <= vd.MAX_PROMPT_CHARS
+    assert captured["data"]["prompt"].startswith("...")
+
+
 def test_type_text_falls_back_to_controller_when_xdotool_fails(vd, monkeypatch):
     app = vd.VoiceDictationApp()
 
-    monkeypatch.setattr(
-        vd.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1)
-    )
+    # Make paste fail (xclip), xdotool type fail (non-zero), then pynput fallback
+    call_log = []
+    def fake_run(cmd, **kw):
+        call_log.append(cmd[:3])
+        if "xclip" in cmd:
+            raise RuntimeError("xclip not available")
+        if cmd[:2] == ["xdotool", "key"]:
+            raise RuntimeError("paste fail")
+        return SimpleNamespace(returncode=1, stderr=b"")
+    monkeypatch.setattr(vd.subprocess, "run", fake_run)
+
     app.type_text("typed")
 
     from pynput.keyboard import Controller
 
     assert Controller.typed_text[-1] == "typed"
+    assert any("xdotool" in c and "type" in c for c in call_log)
 
 
 def test_audio_recorder_stop_writes_wav_and_returns_path(vd, monkeypatch):

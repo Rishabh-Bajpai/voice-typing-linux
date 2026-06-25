@@ -35,9 +35,11 @@ def test_process_stream_chunk_transcribes_types_and_cleans_file(vd, monkeypatch)
 
 
 def test_toggle_recording_start_and_stop_non_streaming(vd, monkeypatch):
-    app = vd.VoiceDictationApp()
     vd.STREAMING_MODE = False
     vd.DEVICE_INDEX = 2
+    vd.LLM_ACTION = "off"
+    app = vd.VoiceDictationApp()
+    app.llm_action = "off"
 
     events = {"start_called_with": None, "typed": None}
     monkeypatch.setattr(vd.threading, "Thread", ImmediateThread)

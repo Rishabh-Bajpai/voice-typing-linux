@@ -249,3 +249,172 @@ def test_service_idempotent_branches(vd, monkeypatch):
 
     app.is_running = False
     app.stop_service()  # early return branch when already stopped
+
+
+def test_backspace_uses_xdotool_first(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    calls = []
+    monkeypatch.setattr(
+        vd.subprocess, "run",
+        lambda *a, **k: calls.append(a[0]),
+    )
+    app._backspace(3)
+    assert len(calls) == 1
+    assert calls[0][:2] == ["xdotool", "key"]
+    assert calls[0][2:] == ["BackSpace"] * 3
+
+
+def test_backspace_fallback_to_pynput(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    monkeypatch.setattr(
+        vd.subprocess, "run",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no xdotool")),
+    )
+    backspaces = {"count": 0}
+
+    import pynput.keyboard as kb_mod
+
+    class FakeKey:
+        backspace = "backspace"
+
+    class FallbackController:
+        def press(self, key):
+            pass
+
+        def release(self, key):
+            backspaces["count"] += 1
+
+    monkeypatch.setattr(kb_mod, "Key", FakeKey)
+    monkeypatch.setattr(kb_mod, "Controller", FallbackController)
+
+    app._backspace(5)
+    assert backspaces["count"] == 5
+
+
+def test_type_text_does_not_append_history(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.transcription_history.clear()
+    monkeypatch.setattr(vd.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+
+    app.type_text("hello")
+    assert len(app.transcription_history) == 0
+    assert app.last_transcription == "hello"
+
+
+def test_detect_wake_word(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+
+    detected, rest = app._detect_wake_word("Chanakya, turn on the lights")
+    assert detected
+    assert rest == "turn on the lights"
+
+    detected, rest = app._detect_wake_word("chanakya turn on the lights")
+    assert detected
+    assert rest == "turn on the lights"
+
+    detected, rest = app._detect_wake_word("CHANAKYA! do something")
+    assert detected
+    assert rest == "do something"
+
+    detected, rest = app._detect_wake_word("turn on the lights")
+    assert not detected
+
+    detected, rest = app._detect_wake_word("Chanakya")
+    assert detected
+    assert rest == ""
+
+    detected, rest = app._detect_wake_word("turn on chanakya lights")
+    assert not detected
+
+
+def test_process_and_output_wake_word_dispatches_command(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.command_url = "https://ntfy.example.org/test"
+    app.llm_action = "off"
+    vd.STREAMING_MODE = False
+
+    sent = {"text": None}
+    monkeypatch.setattr(app, "send_command", lambda t: sent.__setitem__("text", t))
+    monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(app, "transcription_history", [])
+    monkeypatch.setattr(app, "_save_history", lambda: None)
+
+    app.process_and_output("Chanakya, turn on the lights")
+    assert sent["text"] == "turn on the lights", f"got {sent['text']!r}"
+
+    sent["text"] = None
+    app.process_and_output("Chanakya")
+    assert sent["text"] is None, "wake word alone should not send command"
+
+    sent["text"] = None
+    app.process_and_output("just regular dictation")
+    assert sent["text"] is None, "regular text should not send command"
+
+
+def test_process_and_output_wake_word_llm_processed(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.wake_word = "chanakya"
+    app.command_url = "https://ntfy.example.org/test"
+    app.llm_action = "grammar"
+    vd.STREAMING_MODE = False
+
+    sent = {"text": None}
+    monkeypatch.setattr(vd, "llm_process", lambda text, action, inst: text.capitalize())
+    monkeypatch.setattr(app, "send_command", lambda t: sent.__setitem__("text", t))
+    monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(app, "transcription_history", [])
+    monkeypatch.setattr(app, "_save_history", lambda: None)
+
+    app.process_and_output("Chanakya, turn on the lights")
+    assert sent["text"] == "Turn on the lights", f"got {sent['text']!r}"
+
+
+def test_push_to_hold_start_creates_timer(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(app, "play_beep", lambda *a, **k: None)
+    monkeypatch.setattr(app.recorder, "start", lambda *a, **kw: None)
+
+    app._push_to_hold_start()
+    assert app._pth_timer is not None
+    assert app._pth_timer.is_alive() is True
+    assert app._pth_timer.interval == 5.0
+
+
+def test_push_to_hold_stop_cancels_timer(vd, monkeypatch):
+    app = vd.VoiceDictationApp()
+    app.is_recording = True
+    monkeypatch.setattr(app, "play_beep", lambda *a, **k: None)
+    monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(app.recorder, "stop", lambda: None)
+
+    app._pth_timer = vd.threading.Timer(10.0, lambda: None)
+    app._pth_timer.daemon = True
+    app._pth_timer.start()
+
+    app._push_to_hold_stop()
+    assert app._pth_timer is None
+
+
+def test_stop_service_cancels_pth_timer(vd, monkeypatch):
+    import threading as real_threading
+
+    app = vd.VoiceDictationApp()
+    app.is_running = True
+    cancelled = {"timer": False}
+    timer = real_threading.Timer(10.0, lambda: None)
+    original_cancel = timer.cancel
+    timer.cancel = lambda: (
+        cancelled.__setitem__("timer", True) or original_cancel()
+    )
+    app._pth_timer = timer
+
+    monkeypatch.setattr(app, "notify", lambda *a, **k: None)
+    monkeypatch.setattr(app.recorder, "stop", lambda: None)
+    monkeypatch.setattr(vd.threading, "Thread", ImmediateThread)
+
+    app.start_service()
+    app.stop_service()
+    assert cancelled["timer"]

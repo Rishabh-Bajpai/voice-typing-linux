@@ -23,6 +23,7 @@ Then open `http://127.0.0.1:3221` in your browser to access the web UI.
 - **Dual Modes** — Choose between streaming (real-time) or batch transcription
 - **Auto-Typing** — Automatically types transcribed text into the active window
 - **Web UI** — Control settings, view status, manage microphone selection, and test hardware
+- **Voice Commands** — Configurable wake word (default: "chanakya") dispatches spoken commands to an external URL via HTTP POST
 - **Mic Test** — Real-time 12-bar VU meter with dBFS readout to verify your microphone
 - **STT Test** — Record a 2-second sample and send it to the endpoint to verify transcription works
 - **Transcription History** — Scrollable log of all transcriptions with timestamps and source modes
@@ -55,6 +56,43 @@ Configure via environment variables in `.env`:
 | `VOICE_TYPING_UI_PORT` | `3221` | Web UI port |
 
 **Note:** The endpoint must be OpenAI-compatible for audio transcription and accept a `model` form field.
+
+Runtime preferences (LLM action, wake word, command URL, push-to-hold mode, clipboard mode, device index) are saved to `config.json` — a per-user file excluded from version control. These can be changed at any time from the web UI and persist across restarts.
+
+## Voice Commands
+
+When the first word of transcribed speech matches the configured **wake word** (default: `"chanakya"`), the app strips the wake word and sends the remainder as a command to a configurable URL. This is useful for integrating with home automation, custom scripts, or any HTTP endpoint.
+
+**How it works:**
+
+1. Say `"Chanakya, turn on the lights"` into the microphone
+2. Transcription detects the wake word `"Chanakya"` at the start
+3. The wake word is stripped — the rest `"turn on the lights"` is extracted
+4. If LLM post-processing is enabled, the command text is processed (e.g. grammar-fixed)
+5. The final text is POSTed as raw body to the **Command URL** (e.g. `https://ntfy.example.org/Chanakya`)
+6. Nothing is typed into the active window — it's a pure command dispatch
+
+**Wake word rules:**
+- Detection is case-insensitive and punctuation-robust: `"Chanakya,"`, `"chanakya!"`, `"CHANAKYA:"` all match
+- Wake word alone with no following text (just `"Chanakya"`) does nothing
+- Wake word appearing mid-sentence is left untouched — only the leading word triggers dispatch
+- Wake word and Command URL are configurable at runtime from the web UI Settings panel
+
+**Example flow with LLM off:**
+```
+You say:       "Chanakya, turn on the lights"
+Transcribed:   "Chanakya, turn on the lights"
+POSTed to URL: "turn on the lights"
+History:       "↪ turn on the lights"  (amber dot)
+```
+
+**Example flow with LLM on (grammar):**
+```
+You say:       "Chanakya, turn on the lights"
+Transcribed:   "Chanakya, turn on the lights"
+LLM-processed: "Turn on the lights."
+POSTed to URL: "Turn on the lights."
+```
 
 ## Running on Startup (Ubuntu)
 

@@ -820,6 +820,7 @@ HTML_TEMPLATE = """
         let isRecording = false;
         let lastLoggedText = "";
         let initialPromptWords = [];
+        let configReady = false;
 
         function escapeHtml(s) {
             const div = document.createElement('div');
@@ -976,9 +977,10 @@ HTML_TEMPLATE = """
         }
 
         async function autoSave() {
+            if (!configReady) return;
             const devSelect = document.getElementById('deviceSelect');
             const devOpt = devSelect.selectedOptions[0];
-            const pulseSource = devOpt ? devOpt.dataset.pulsesource || '' : '';
+            const pulseSource = devOpt ? devOpt.dataset.pulseSource || '' : '';
             const settings = {
                 stt_endpoint: document.getElementById('sttEndpoint').value,
                 stt_model: document.getElementById('sttModel').value,
@@ -1196,7 +1198,8 @@ HTML_TEMPLATE = """
                 renderChips();
                 updatePromptCharCount();
                 onLlmActionChange();
-            } catch (e) {}
+                configReady = true;
+            } catch (e) { configReady = true; }
         }
 
         let lastPreviewText = '';
@@ -1216,8 +1219,8 @@ HTML_TEMPLATE = """
             } catch (e) {}
         }
 
+        loadLlmConfig().then ? null : null;
         loadDevices();
-        loadLlmConfig();
         setInterval(updateStatus, 1000);
         setInterval(updateHistory, 2000);
         setInterval(updatePreview, 500);
@@ -1354,7 +1357,6 @@ def llm_config():
     return jsonify({
         "openai_base_url": vd.OPENAI_BASE_URL,
         "openai_chat_model_id": vd.OPENAI_CHAT_MODEL_ID,
-        "openai_api_key": vd.OPENAI_API_KEY,
         "llm_action": dict_app.llm_action,
         "llm_instruction": dict_app.llm_instruction,
         "push_to_hold": dict_app.push_to_hold,

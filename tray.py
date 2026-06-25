@@ -168,7 +168,7 @@ def build_menu(indicator):
 
     # === Open Web UI ===
     item_web = Gtk.MenuItem(label="Open Web UI")
-    item_web.connect("activate", lambda _: subprocess.run(["xdg-open", UI_URL], capture_output=True))
+    item_web.connect("activate", lambda _: subprocess.Popen(["xdg-open", UI_URL], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     menu.append(item_web)
 
     # === Quit ===

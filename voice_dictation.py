@@ -288,51 +288,53 @@ class AudioRecorder:
             except Exception as cycle_err:
                 print(f"[REC] PulseAudio source cycle failed: {cycle_err}", flush=True)
 
-        for attempt in range(2):
-            if pulse_src:
-                os.environ["PULSE_SOURCE"] = pulse_src
-            try:
-                # Re-check rate if device changed
-                device_info = sd.query_devices(target_device, "input")
-                default_rate = int(device_info["default_samplerate"])
-                rate_to_use = default_rate
+        try:
+            for attempt in range(2):
+                if pulse_src:
+                    os.environ["PULSE_SOURCE"] = pulse_src
                 try:
-                    sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
-                    rate_to_use = RATE
-                except Exception:
-                    pass
+                    # Re-check rate if device changed
+                    device_info = sd.query_devices(target_device, "input")
+                    default_rate = int(device_info["default_samplerate"])
+                    rate_to_use = default_rate
+                    try:
+                        sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
+                        rate_to_use = RATE
+                    except Exception:
+                        pass
 
-                # Sync self.rate with actual stream rate so stop() writes the WAV
-                # header at the correct sample rate (was a source of garbled audio).
-                self.rate = rate_to_use
+                    # Sync self.rate with actual stream rate so stop() writes the WAV
+                    # header at the correct sample rate (was a source of garbled audio).
+                    self.rate = rate_to_use
 
-                self.stream = sd.InputStream(
-                    samplerate=rate_to_use,
-                    device=target_device,
-                    channels=CHANNELS,
-                    callback=callback,
-                )
-                self.stream.start()
-                print(
-                    f"[REC] Audio stream started on device {target_device} at {rate_to_use}Hz.",
-                    flush=True,
-                )
-                break
-            except Exception as e:
-                err_str = str(e)
-                # PulseAudio can leave a source in a suspended state after a stream
-                # crashes (e.g. a call ended abruptly). Cycling suspend-source forces
-                # PulseAudio to re-probe the ALSA device and clears the error.
-                if attempt == 0 and ("-9985" in err_str or "PaErrorCode" in err_str or "Device unavailable" in err_str or "Input/output error" in err_str):
-                    print(f"[REC] Device unavailable (attempt {attempt+1}), cycling PulseAudio source...", flush=True)
-                    _cycle_pulse_source()
-                    continue
-                raise e
-
-        if pulse_src and old_pulse is not None:
-            os.environ["PULSE_SOURCE"] = old_pulse
-        elif pulse_src:
-            os.environ.pop("PULSE_SOURCE", None)
+                    self.stream = sd.InputStream(
+                        samplerate=rate_to_use,
+                        device=target_device,
+                        channels=CHANNELS,
+                        callback=callback,
+                    )
+                    self.stream.start()
+                    print(
+                        f"[REC] Audio stream started on device {target_device} at {rate_to_use}Hz.",
+                        flush=True,
+                    )
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    # PulseAudio can leave a source in a suspended state after a stream
+                    # crashes (e.g. a call ended abruptly). Cycling suspend-source forces
+                    # PulseAudio to re-probe the ALSA device and clears the error.
+                    if attempt == 0 and ("-9985" in err_str or "PaErrorCode" in err_str or "Device unavailable" in err_str or "Input/output error" in err_str):
+                        print(f"[REC] Device unavailable (attempt {attempt+1}), cycling PulseAudio source...", flush=True)
+                        _cycle_pulse_source()
+                        continue
+                    raise e
+        finally:
+            if pulse_src:
+                if old_pulse is not None:
+                    os.environ["PULSE_SOURCE"] = old_pulse
+                else:
+                    os.environ.pop("PULSE_SOURCE", None)
 
     def stop(self):
         self.recording = False
@@ -381,6 +383,7 @@ class VoiceDictationApp:
         self._hotkey_pressed = False
         self._pth_timer = None
         self._typing_lock = threading.Lock()
+        self._history_lock = threading.Lock()
         self._last_hotkey_time = 0.0
 
     def _load_history(self):
@@ -537,13 +540,14 @@ class VoiceDictationApp:
             self.send_command(command_text)
             display_text = f"↪ {command_text}"
             self.last_transcription = display_text
-            self.transcription_history.append({
-                "text": display_text,
-                "time": time.strftime("%H:%M:%S"),
-                "source": "command",
-            })
-            if len(self.transcription_history) > 50:
-                self.transcription_history.pop(0)
+            with self._history_lock:
+                self.transcription_history.append({
+                    "text": display_text,
+                    "time": time.strftime("%H:%M:%S"),
+                    "source": "command",
+                })
+                if len(self.transcription_history) > 50:
+                    self.transcription_history.pop(0)
             self._save_history()
             print(f"[CMD] Command processed: '{command_text}'", flush=True)
             return
@@ -554,13 +558,14 @@ class VoiceDictationApp:
             processed = text
 
         self.last_transcription = processed
-        self.transcription_history.append({
-            "text": processed,
-            "time": time.strftime("%H:%M:%S"),
-            "source": "llm" if (not STREAMING_MODE and self.llm_action != "off") else ("streaming" if STREAMING_MODE else "batch"),
-        })
-        if len(self.transcription_history) > 50:
-            self.transcription_history.pop(0)
+        with self._history_lock:
+            self.transcription_history.append({
+                "text": processed,
+                "time": time.strftime("%H:%M:%S"),
+                "source": "llm" if (not STREAMING_MODE and self.llm_action != "off") else ("streaming" if STREAMING_MODE else "batch"),
+            })
+            if len(self.transcription_history) > 50:
+                self.transcription_history.pop(0)
         self._save_history()
 
         print(f"Output: '{processed}'", flush=True)
@@ -575,8 +580,6 @@ class VoiceDictationApp:
         with self._typing_lock:
             print(f"Injecting: '{text}'", flush=True)
             self.last_transcription = text
-            if self._paste_via_clipboard(text):
-                return
             try:
                 result = subprocess.run(
                     ["xdotool", "type", "--clearmodifiers", text], capture_output=True, timeout=30
@@ -587,6 +590,8 @@ class VoiceDictationApp:
                 print(f"[TYPE] xdotool failed (code {result.returncode}): {result.stderr.decode()[:100]}", flush=True)
             except Exception as e:
                 print(f"[TYPE] xdotool error: {e}", flush=True)
+            if self._paste_via_clipboard(text):
+                return
             try:
                 from pynput.keyboard import Controller
                 Controller().type(text)
@@ -756,7 +761,8 @@ class VoiceDictationApp:
 
                 def process_stop():
                     try:
-                        audio_path = self.recorder.stop()
+                        rec = self.recorder
+                        audio_path = rec.stop()
                         if not STREAMING_MODE and audio_path:
                             text = self.transcribe(audio_path)
                             self.process_and_output(text)
@@ -791,7 +797,7 @@ class VoiceDictationApp:
             print("[PTH] Safety timeout — stopping", flush=True)
             self._push_to_hold_stop()
 
-        self._pth_timer = threading.Timer(1800.0, timeout)
+        self._pth_timer = threading.Timer(5.0, timeout)
         self._pth_timer.daemon = True
         self._pth_timer.start()
 
@@ -808,7 +814,8 @@ class VoiceDictationApp:
 
         def process_stop():
             try:
-                audio_path = self.recorder.stop()
+                rec = self.recorder
+                audio_path = rec.stop()
                 if not STREAMING_MODE and audio_path:
                     text = self.transcribe(audio_path)
                     self.process_and_output(text)
@@ -868,13 +875,14 @@ class VoiceDictationApp:
             text = self.transcribe(temp_file)
             if text:
                 print(f"[STREAM] '{text}'", flush=True)
-                self.transcription_history.append({
-                    "text": text,
-                    "time": time.strftime("%H:%M:%S"),
-                    "source": "streaming",
-                })
-                if len(self.transcription_history) > 50:
-                    self.transcription_history.pop(0)
+                with self._history_lock:
+                    self.transcription_history.append({
+                        "text": text,
+                        "time": time.strftime("%H:%M:%S"),
+                        "source": "streaming",
+                    })
+                    if len(self.transcription_history) > 50:
+                        self.transcription_history.pop(0)
                 self._save_history()
                 self.type_text(text + " ")
             try:
@@ -1013,38 +1021,40 @@ class VoiceDictationApp:
             # Use PulseAudio device (index 9) for shared access, same as recorder.start()
             target_device = 9
 
-        device_info = sd.query_devices(target_device, "input")
-        default_rate = int(device_info["default_samplerate"])
-        rate_to_use = default_rate
         try:
-            sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
-            rate_to_use = RATE
-        except Exception:
-            pass
+            device_info = sd.query_devices(target_device, "input")
+            default_rate = int(device_info["default_samplerate"])
+            rate_to_use = default_rate
+            try:
+                sd.check_input_settings(device=target_device, channels=CHANNELS, samplerate=RATE)
+                rate_to_use = RATE
+            except Exception:
+                pass
 
-        self._mic_test_level = 0.0
-        self._mic_test_active = True
-        self._mic_test_seq += 1
-        seq = self._mic_test_seq
+            self._mic_test_level = 0.0
+            self._mic_test_active = True
+            self._mic_test_seq += 1
+            seq = self._mic_test_seq
 
-        def callback(indata, frames, time_val, status):
-            if status:
-                print(f"Mic test status: {status}", flush=True)
-            rms = np.sqrt(np.mean(indata**2))
-            self._mic_test_level = min(1.0, rms * 20)
+            def callback(indata, frames, time_val, status):
+                if status:
+                    print(f"Mic test status: {status}", flush=True)
+                rms = np.sqrt(np.mean(indata**2))
+                self._mic_test_level = min(1.0, rms * 20)
 
-        self._mic_test_stream = sd.InputStream(
-            samplerate=rate_to_use,
-            device=target_device,
-            channels=CHANNELS,
-            callback=callback,
-        )
-        self._mic_test_stream.start()
-
-        if pulse_src and old_pulse is not None:
-            os.environ["PULSE_SOURCE"] = old_pulse
-        elif pulse_src:
-            os.environ.pop("PULSE_SOURCE", None)
+            self._mic_test_stream = sd.InputStream(
+                samplerate=rate_to_use,
+                device=target_device,
+                channels=CHANNELS,
+                callback=callback,
+            )
+            self._mic_test_stream.start()
+        finally:
+            if pulse_src:
+                if old_pulse is not None:
+                    os.environ["PULSE_SOURCE"] = old_pulse
+                else:
+                    os.environ.pop("PULSE_SOURCE", None)
 
         def auto_stop():
             time.sleep(5)

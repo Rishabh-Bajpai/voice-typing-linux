@@ -148,6 +148,7 @@ def clear_voice_typing_env(monkeypatch):
         "VOICE_TYPING_UI_PORT",
         "VOICE_TYPING_WAKE_WORD",
         "VOICE_TYPING_COMMAND_URL",
+        "VOICE_TYPING_PULSE_SOURCE",
     ]
     for key in keys:
         monkeypatch.delenv(key, raising=False)

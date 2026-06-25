@@ -18,9 +18,11 @@ def llm_process(text, action="off", instruction=None):
     if action == "off" or not text:
         return text
 
-    base_url = os.getenv("OPENAI_BASE_URL", "").rstrip("/")
-    model = os.getenv("OPENAI_CHAT_MODEL_ID", "")
-    api_key = os.getenv("OPENAI_API_KEY", "")
+    import voice_dictation as vd
+
+    base_url = (vd.OPENAI_BASE_URL or os.getenv("OPENAI_BASE_URL", "")).rstrip("/")
+    model = vd.OPENAI_CHAT_MODEL_ID or os.getenv("OPENAI_CHAT_MODEL_ID", "")
+    api_key = vd.OPENAI_API_KEY or os.getenv("OPENAI_API_KEY", "")
 
     if not base_url or not model:
         print("[LLM] Missing OPENAI_BASE_URL or OPENAI_CHAT_MODEL_ID", flush=True)

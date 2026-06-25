@@ -25,7 +25,7 @@ python app.py          # served at http://127.0.0.1:3221
 ## Critical Details
 
 ### Dependencies — two environments needed
-- **App runtime** (conda `voiceTyping`): `flask flask-cors requests sounddevice scipy numpy pynput pyperclip pystray Pillow`
+- **App runtime** (conda `voiceTyping`): `flask flask-cors requests sounddevice scipy numpy pynput pyperclip Pillow`
 - **System tray** (system `/usr/bin/python3`): requires `python3-gi`, `gir1.2-ayatanaappindicator3-0.1` via apt — conda's pygobject lacks GI introspection data
 
 ### Hotkey

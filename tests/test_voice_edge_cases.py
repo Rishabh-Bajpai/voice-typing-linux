@@ -380,6 +380,7 @@ def test_push_to_hold_start_creates_timer(vd, monkeypatch):
     app._push_to_hold_start()
     assert app._pth_timer is not None
     assert app._pth_timer.is_alive() is True
+    assert app._pth_timer.interval == 5.0
 
 
 def test_push_to_hold_stop_cancels_timer(vd, monkeypatch):

@@ -94,6 +94,73 @@ LLM-processed: "Turn on the lights."
 POSTed to URL: "Turn on the lights."
 ```
 
+## Receiving Commands
+
+Other applications can receive voice commands by exposing an HTTP endpoint at the configured **Command URL**.
+
+### Protocol
+
+| Field | Value |
+|-------|-------|
+| Method | `POST` |
+| URL | Any URL set in **Command URL** field in the web UI |
+| Body | Raw text — command only (wake word stripped) |
+| Content-Type | `text/plain` |
+| Headers | None added by the app |
+
+### Example receivers
+
+**Flask:**
+```python
+@app.route("/commands", methods=["POST"])
+def handle_command():
+    command = request.get_data(as_text=True)
+    print(f"Received: {command}")
+    return "OK", 200
+```
+
+**FastAPI:**
+```python
+from fastapi import FastAPI, Request
+app = FastAPI()
+@app.post("/commands")
+async def handle(req: Request):
+    command = (await req.body()).decode()
+    print(f"Received: {command}")
+```
+
+**Express (Node.js):**
+```javascript
+app.post("/commands", (req, res) => {
+  console.log("Received:", req.body);
+  res.send("OK");
+});
+```
+
+**Bash (netcat):**
+```bash
+while true; do
+  command=$(nc -l -p 8080 -q 1 | tail -1)
+  echo "Received: $command"
+done
+```
+
+### Testing
+
+```bash
+curl -X POST https://your-host/commands \
+  -H "Content-Type: text/plain" \
+  -d "turn on the lights"
+```
+
+### Notes
+
+- Commands are dispatched asynchronously — the app does not wait for a response
+- HTTP timeout is 5 seconds; errors are logged silently (non-blocking)
+- If LLM post-processing is enabled, the command is grammar-fixed or translated before dispatch
+- Works only in batch mode (streaming mode bypasses command dispatch)
+- Common use cases: ntfy push notifications, Home Assistant webhooks, custom automation scripts, smart home voice control
+
 ## Running on Startup (Ubuntu)
 
 ### Option 1: Startup Applications (easiest)

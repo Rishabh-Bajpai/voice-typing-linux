@@ -919,13 +919,16 @@ class VoiceDictationApp:
                 main_key = p
                 break
 
+        print(f"[HOTKEY] Starting listener for {HOTKEY_STR} (push_to_hold={self.push_to_hold})", flush=True)
+
         def listen():
             try:
                 with keyboard.GlobalHotKeys({HOTKEY_STR: self._on_hotkey}) as h:
                     self.hotkey_listener = h
+                    print(f"[HOTKEY] Registered: {HOTKEY_STR}", flush=True)
                     h.join()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[HOTKEY] Failed to register ({HOTKEY_STR}): {e}", flush=True)
 
         if main_key and self.push_to_hold:
             main_key_lower = main_key.lower()

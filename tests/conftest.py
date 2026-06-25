@@ -157,8 +157,12 @@ def clear_voice_typing_env(monkeypatch):
 @pytest.fixture
 def vd(tmp_path, monkeypatch):
     import voice_dictation
+    import correction_engine
 
-    module = importlib.reload(voice_dictation)
-    monkeypatch.setattr(module, "CONFIG_FILE", str(tmp_path / "config.json"))
-    monkeypatch.setattr(module, "HISTORY_FILE", str(tmp_path / "history.json"))
-    return module
+    importlib.reload(correction_engine)
+    monkeypatch.setattr(correction_engine, "CORRECTIONS_FILE", str(tmp_path / "corrections.json"))
+
+    vd_module = importlib.reload(voice_dictation)
+    monkeypatch.setattr(vd_module, "CONFIG_FILE", str(tmp_path / "config.json"))
+    monkeypatch.setattr(vd_module, "HISTORY_FILE", str(tmp_path / "history.json"))
+    return vd_module

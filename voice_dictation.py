@@ -12,6 +12,15 @@ import subprocess
 import queue
 
 from llm_client import llm_process
+from correction_engine import (
+    load_corrections,
+    save_corrections,
+    apply_corrections,
+    suggest_corrections,
+    validate_correction,
+    new_correction,
+    extract_context,
+)
 
 # Load .env file manually (before Flask does it, since module-level code runs first)
 _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -60,6 +69,7 @@ def load_config():
         "WAKE_WORD": "chanakya",
         "COMMAND_URL": "",
         "INITIAL_PROMPT": "",
+        "BEEP_VOLUME": 0.5,
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -103,6 +113,7 @@ LLM_INSTRUCTION = CONFIG["LLM_INSTRUCTION"]
 WAKE_WORD = CONFIG["WAKE_WORD"]
 COMMAND_URL = CONFIG["COMMAND_URL"]
 INITIAL_PROMPT = CONFIG["INITIAL_PROMPT"]
+BEEP_VOLUME = CONFIG.get("BEEP_VOLUME", 0.5)
 MAX_PROMPT_CHARS = 800
 
 def _load_dotenv():
@@ -373,6 +384,7 @@ class VoiceDictationApp:
         self._mic_test_seq = 0
         self.transcription_history = []
         self._load_history()
+        self.corrections = load_corrections()
         self.llm_action = LLM_ACTION
         self.llm_instruction = LLM_INSTRUCTION
         self.push_to_hold = PUSH_TO_HOLD
@@ -385,6 +397,8 @@ class VoiceDictationApp:
         self._typing_lock = threading.Lock()
         self._history_lock = threading.Lock()
         self._last_hotkey_time = 0.0
+        self._correction_log = []
+        self.beep_volume = BEEP_VOLUME
 
     def _load_history(self):
         try:
@@ -405,6 +419,92 @@ class VoiceDictationApp:
         except Exception as e:
             print(f"Error saving history: {e}", flush=True)
 
+    def _save_corrections(self):
+        save_corrections(self.corrections)
+
+    def get_corrections(self):
+        return self.corrections
+
+    def add_correction(self, pattern, replacement, source="manual", context_left="", context_right=""):
+        errors = validate_correction(pattern, replacement)
+        if errors:
+            return {"success": False, "errors": errors}
+        corr = new_correction(pattern, replacement, source, context_left, context_right)
+        self.corrections.append(corr)
+        if len(self.corrections) > 200:
+            self.corrections = self.corrections[-200:]
+        self._save_corrections()
+        return {"success": True, "correction": corr}
+
+    def remove_correction(self, corr_id):
+        before = len(self.corrections)
+        self.corrections = [c for c in self.corrections if c.get("id") != corr_id]
+        if len(self.corrections) < before:
+            self._save_corrections()
+            return {"success": True}
+        return {"success": False, "error": "Correction not found"}
+
+    def update_correction(self, corr_id, updates):
+        for c in self.corrections:
+            if c.get("id") == corr_id:
+                allowed = {"pattern", "replacement", "enabled", "case_sensitive", "context_left", "context_right"}
+                for k, v in updates.items():
+                    if k in allowed:
+                        c[k] = v
+                self._save_corrections()
+                return {"success": True, "correction": c}
+        return {"success": False, "error": "Correction not found"}
+
+    def correct_history_entry(self, index, new_text):
+        if index < 0 or index >= len(self.transcription_history):
+            return {"success": False, "error": "History entry not found"}
+        entry = self.transcription_history[index]
+        old_text = entry["text"]
+        if old_text == new_text:
+            return {"success": True, "changed": False, "suggestions": []}
+        entry["text"] = new_text
+        self._save_history()
+        suggestions = suggest_corrections(old_text, new_text)
+        for s in suggestions:
+            left, right = extract_context(old_text, s["pattern"])
+            s["context_left"] = left
+            s["context_right"] = right
+        return {"success": True, "changed": True, "suggestions": suggestions}
+
+    def _log_correction_applied(self, pattern, replacement, corr_id=""):
+        entry = {
+            "corr_id": corr_id,
+            "pattern": pattern,
+            "replacement": replacement,
+            "time": time.strftime("%H:%M:%S"),
+            "timestamp": time.time(),
+        }
+        self._correction_log.append(entry)
+        if len(self._correction_log) > 50:
+            self._correction_log.pop(0)
+        self.status = f"Corrected: {pattern} \u2192 {replacement}"
+
+    def get_correction_log(self):
+        return list(self._correction_log)
+
+    def flag_incorrect(self, corr_id, action="disable", context_left="", context_right=""):
+        for c in self.corrections:
+            if c.get("id") == corr_id:
+                if action == "disable":
+                    c["enabled"] = False
+                    self._log_correction_applied("FLAGGED: " + c["pattern"], "disabled", c.get("id", ""))
+                    self._save_corrections()
+                    return {"success": True, "action": "disabled"}
+                elif action == "add_exception":
+                    exc = {"left": context_left, "right": context_right}
+                    if "exceptions" not in c:
+                        c["exceptions"] = []
+                    c["exceptions"].append(exc)
+                    self._save_corrections()
+                    return {"success": True, "action": "exception_added"}
+                return {"success": False, "error": "Unknown action"}
+        return {"success": False, "error": "Correction not found"}
+
     def notify(self, title, message):
         print(f"[{title}] {message}", flush=True)
         self.status = f"{title}: {message}"
@@ -420,7 +520,8 @@ class VoiceDictationApp:
             sample_rate = 44100
             t = np.linspace(0, duration, int(sample_rate * duration), False)
             tone = np.sin(frequency * t * 2 * np.pi)
-            sd.play(tone, samplerate=sample_rate)
+            vol = max(0.0, min(1.0, getattr(self, "beep_volume", BEEP_VOLUME)))
+            sd.play(tone * vol, samplerate=sample_rate)
         except Exception as e:
             print(f"Beep error: {e}")
 
@@ -434,6 +535,16 @@ class VoiceDictationApp:
                     parts.append(self.wake_word)
                 if self.initial_prompt:
                     parts.append(self.initial_prompt.strip())
+                corr_words = []
+                seen = set()
+                for c in self.corrections:
+                    if c.get("enabled", True):
+                        r = c.get("replacement", "").strip().lower()
+                        if r and r not in seen and len(r) >= 3:
+                            seen.add(r)
+                            corr_words.append(r)
+                if corr_words:
+                    parts.append(", ".join(corr_words[:20]))
                 if parts:
                     prompt = ", ".join(parts)
                     if len(prompt) > MAX_PROMPT_CHARS:
@@ -521,6 +632,13 @@ class VoiceDictationApp:
 
         print(f"[RAW] Transcribed: '{text}'", flush=True)
 
+        corrected, applied_list = apply_corrections(text, self.corrections)
+        if applied_list:
+            for a in applied_list:
+                self._log_correction_applied(a["pattern"], a["replacement"], a.get("corr_id", ""))
+                print(f"[CORR] '{a['pattern']}' -> '{a['replacement']}' ({a['count']}x)", flush=True)
+            text = corrected
+
         cmd = self._process_voice_commands(text)
         if cmd == "__DELETE_LAST_WORD__":
             self._backspace(4)
@@ -536,7 +654,7 @@ class VoiceDictationApp:
             if not command_text:
                 return
             if not STREAMING_MODE and self.llm_action != "off":
-                command_text = llm_process(command_text, self.llm_action, self.llm_instruction)
+                command_text = llm_process(command_text, self.llm_action, self.llm_instruction, corrections=self.corrections)
             self.send_command(command_text)
             display_text = f"↪ {command_text}"
             self.last_transcription = display_text
@@ -553,7 +671,7 @@ class VoiceDictationApp:
             return
 
         if not STREAMING_MODE and self.llm_action != "off":
-            processed = llm_process(text, self.llm_action, self.llm_instruction)
+            processed = llm_process(text, self.llm_action, self.llm_instruction, corrections=self.corrections)
         else:
             processed = text
 
@@ -639,11 +757,12 @@ class VoiceDictationApp:
         wake_word=None,
         command_url=None,
         initial_prompt=None,
+        beep_volume=None,
     ):
         global STT_ENDPOINT, STT_MODEL, STREAMING_MODE, HOTKEY_STR
         global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED, PULSE_SOURCE_NAME
         global PUSH_TO_HOLD, CLIPBOARD_MODE, LLM_ACTION, LLM_INSTRUCTION
-        global WAKE_WORD, COMMAND_URL, INITIAL_PROMPT
+        global WAKE_WORD, COMMAND_URL, INITIAL_PROMPT, BEEP_VOLUME
 
         need_hotkey_restart = False
 
@@ -656,6 +775,9 @@ class VoiceDictationApp:
                 STREAMING_MODE = bool(streaming)
             if beep_enabled is not None:
                 BEEP_ENABLED = bool(beep_enabled)
+            if beep_volume is not None:
+                BEEP_VOLUME = max(0.0, min(1.0, float(beep_volume)))
+                self.beep_volume = BEEP_VOLUME
             if silence_threshold is not None and str(silence_threshold).strip():
                 SILENCE_THRESHOLD = float(silence_threshold)
             if device_index is not None and str(device_index).strip():
@@ -731,6 +853,7 @@ class VoiceDictationApp:
                 "WAKE_WORD": WAKE_WORD,
                 "COMMAND_URL": COMMAND_URL,
                 "INITIAL_PROMPT": INITIAL_PROMPT,
+                "BEEP_VOLUME": BEEP_VOLUME,
             }
         )
 
@@ -874,15 +997,20 @@ class VoiceDictationApp:
         def run_trans():
             text = self.transcribe(temp_file)
             if text:
+                corrected, applied_list = apply_corrections(text, self.corrections)
+                if applied_list:
+                    for a in applied_list:
+                        self._log_correction_applied(a["pattern"], a["replacement"], a.get("corr_id", ""))
+                        print(f"[STREAM][CORR] '{a['pattern']}' -> '{a['replacement']}'", flush=True)
+                    text = corrected
                 print(f"[STREAM] '{text}'", flush=True)
-                with self._history_lock:
-                    self.transcription_history.append({
-                        "text": text,
-                        "time": time.strftime("%H:%M:%S"),
-                        "source": "streaming",
-                    })
-                    if len(self.transcription_history) > 50:
-                        self.transcription_history.pop(0)
+                self.transcription_history.append({
+                    "text": text,
+                    "time": time.strftime("%H:%M:%S"),
+                    "source": "streaming",
+                })
+                if len(self.transcription_history) > 50:
+                    self.transcription_history.pop(0)
                 self._save_history()
                 self.type_text(text + " ")
             try:
@@ -1133,6 +1261,16 @@ class VoiceDictationApp:
                     parts.append(self.wake_word)
                 if self.initial_prompt:
                     parts.append(self.initial_prompt.strip())
+                corr_words = []
+                seen = set()
+                for c in self.corrections:
+                    if c.get("enabled", True):
+                        r = c.get("replacement", "").strip().lower()
+                        if r and r not in seen and len(r) >= 3:
+                            seen.add(r)
+                            corr_words.append(r)
+                if corr_words:
+                    parts.append(", ".join(corr_words[:20]))
                 if parts:
                     prompt = ", ".join(parts)
                     if len(prompt) > MAX_PROMPT_CHARS:

@@ -14,7 +14,7 @@ SYSTEM_PROMPTS = {
 }
 
 
-def llm_process(text, action="off", instruction=None):
+def llm_process(text, action="off", instruction=None, corrections=None):
     if action == "off" or not text:
         return text
 
@@ -37,6 +37,18 @@ def llm_process(text, action="off", instruction=None):
         system = instruction or "Fix the grammar and improve clarity."
     else:
         return text
+
+    corr_lines = []
+    if corrections:
+        for c in corrections:
+            if c.get("enabled", True):
+                p = c.get("pattern", "").strip()
+                r = c.get("replacement", "").strip()
+                if p and r:
+                    corr_lines.append(f'- "{p}" \u2192 "{r}"')
+    if corr_lines:
+        prefix = "IMPORTANT: Always apply these corrections:\n" + "\n".join(corr_lines) + "\n\n"
+        system = prefix + system
 
     try:
         resp = requests.post(

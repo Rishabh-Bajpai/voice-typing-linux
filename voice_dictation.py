@@ -725,6 +725,7 @@ class VoiceDictationApp:
                 "LLM_INSTRUCTION": LLM_INSTRUCTION,
                 "WAKE_WORD": WAKE_WORD,
                 "COMMAND_URL": COMMAND_URL,
+                "INITIAL_PROMPT": INITIAL_PROMPT,
             }
         )
 

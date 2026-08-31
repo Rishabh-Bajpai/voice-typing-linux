@@ -361,7 +361,7 @@ def test_process_and_output_wake_word_llm_processed(vd, monkeypatch):
     vd.STREAMING_MODE = False
 
     sent = {"text": None}
-    monkeypatch.setattr(vd, "llm_process", lambda text, action, inst: text.capitalize())
+    monkeypatch.setattr(vd, "llm_process", lambda text, action, inst, **kw: text.capitalize())
     monkeypatch.setattr(app, "send_command", lambda t: sent.__setitem__("text", t))
     monkeypatch.setattr(app, "notify", lambda *a, **k: None)
     monkeypatch.setattr(app, "transcription_history", [])

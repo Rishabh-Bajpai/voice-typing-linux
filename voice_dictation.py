@@ -42,6 +42,61 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".voice_typing_history.json")
 
 
+STT_LANGUAGES = {
+    "auto": "Auto (detect)",
+    "en": "English",
+    "hi": "Hindi",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "pt": "Portuguese",
+    "it": "Italian",
+    "ar": "Arabic",
+    "ru": "Russian",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "bn": "Bengali",
+    "mr": "Marathi",
+    "gu": "Gujarati",
+    "pa": "Punjabi",
+    "ur": "Urdu",
+    "fa": "Persian",
+    "he": "Hebrew",
+    "th": "Thai",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "uk": "Ukrainian",
+    "el": "Greek",
+    "cs": "Czech",
+    "ro": "Romanian",
+    "sv": "Swedish",
+    "fi": "Finnish",
+    "da": "Danish",
+    "no": "Norwegian",
+    "hu": "Hungarian",
+    "bg": "Bulgarian",
+    "hr": "Croatian",
+    "sk": "Slovak",
+    "sl": "Slovenian",
+    "lt": "Lithuanian",
+    "lv": "Latvian",
+    "et": "Estonian",
+    "sr": "Serbian",
+    "ka": "Georgian",
+    "hy": "Armenian",
+    "az": "Azerbaijani",
+    "af": "Afrikaans",
+    "sw": "Swahili",
+}
+
+
 def load_config():
     defaults = {
         "STT_ENDPOINT": os.getenv(
@@ -50,6 +105,8 @@ def load_config():
         "STT_MODEL": os.getenv(
             "VOICE_TYPING_STT_MODEL", "Systran/faster-whisper-medium.en"
         ),
+        "STT_LANGUAGE": os.getenv("VOICE_TYPING_STT_LANGUAGE", "auto"),
+        "STT_API_KEY": os.getenv("VOICE_TYPING_STT_API_KEY", os.getenv("STT_API_KEY", "")),
         "DEVICE_INDEX": os.getenv("VOICE_TYPING_DEVICE_INDEX", None),
         "STREAMING_MODE": os.getenv("VOICE_TYPING_STREAMING", "0") == "1",
         "SILENCE_THRESHOLD": float(
@@ -70,17 +127,18 @@ def load_config():
         "COMMAND_URL": "",
         "INITIAL_PROMPT": "",
         "BEEP_VOLUME": 0.5,
+        "BACKSPACE_AFTER_HOTKEY": True,
     }
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
                 loaded = json.load(f)
-            # LLM credentials should NOT come from config.json (they're secrets)
-            for _k in ("OPENAI_BASE_URL", "OPENAI_CHAT_MODEL_ID", "OPENAI_API_KEY"):
-                loaded.pop(_k, None)
             defaults.update(loaded)
         except Exception as e:
             print(f"Error loading config: {e}")
+    # Normalize STT_LANGUAGE: empty or missing -> auto
+    if not defaults.get("STT_LANGUAGE"):
+        defaults["STT_LANGUAGE"] = "auto"
     return defaults
 
 
@@ -92,10 +150,33 @@ def save_config(config_dict):
         print(f"Error saving config: {e}")
 
 
+def _get_pulse_device_index():
+    """Dynamically resolve the PulseAudio ALSA device (pulse/default) instead of hardcoding 9."""
+    try:
+        import sounddevice as _sd
+        devices = _sd.query_devices()
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0 and "pulse" in d["name"].lower():
+                return i
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0 and "default" in d["name"].lower():
+                return i
+        if _sd.default.device and _sd.default.device[0] is not None and _sd.default.device[0] >= 0:
+            return int(_sd.default.device[0])
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0:
+                return i
+    except Exception:
+        pass
+    return 0
+
+
 # Initialize globals from config
 CONFIG = load_config()
 STT_ENDPOINT = CONFIG["STT_ENDPOINT"]
 STT_MODEL = CONFIG["STT_MODEL"]
+STT_LANGUAGE = CONFIG["STT_LANGUAGE"]
+STT_API_KEY = CONFIG["STT_API_KEY"]
 DEVICE_INDEX = CONFIG["DEVICE_INDEX"]
 STREAMING_MODE = CONFIG["STREAMING_MODE"]
 SILENCE_THRESHOLD = CONFIG["SILENCE_THRESHOLD"]
@@ -114,7 +195,56 @@ WAKE_WORD = CONFIG["WAKE_WORD"]
 COMMAND_URL = CONFIG["COMMAND_URL"]
 INITIAL_PROMPT = CONFIG["INITIAL_PROMPT"]
 BEEP_VOLUME = CONFIG.get("BEEP_VOLUME", 0.5)
+BACKSPACE_AFTER_HOTKEY = CONFIG.get("BACKSPACE_AFTER_HOTKEY", True)
 MAX_PROMPT_CHARS = 800
+
+# Auto-migrate stale hardcoded DEVICE_INDEX 9 (and other invalid indices) to real pulse/default device
+try:
+    if DEVICE_INDEX is not None:
+        _test_idx = int(DEVICE_INDEX)
+        import sounddevice as _sd_check
+        _sd_check.query_devices(_test_idx, "input")
+except Exception:
+    try:
+        _pulse_idx = _get_pulse_device_index() if '_get_pulse_device_index' in globals() else None
+        # _get_pulse_device_index may not be defined yet on first load; handle via direct query
+        if _pulse_idx is None:
+            import sounddevice as _sd2
+            _pulse_idx = _sd2.default.device[0]
+        old = DEVICE_INDEX
+        DEVICE_INDEX = _pulse_idx
+        CONFIG["DEVICE_INDEX"] = _pulse_idx
+        print(f"[MIGRATE] DEVICE_INDEX {old} invalid -> {DEVICE_INDEX} (pulse/default)", flush=True)
+        try:
+            save_config({
+                "STT_ENDPOINT": STT_ENDPOINT,
+                "STT_MODEL": STT_MODEL,
+                "STT_LANGUAGE": STT_LANGUAGE,
+                "STT_API_KEY": STT_API_KEY,
+                "STREAMING_MODE": STREAMING_MODE,
+                "BEEP_ENABLED": BEEP_ENABLED,
+                "SILENCE_THRESHOLD": SILENCE_THRESHOLD,
+                "DEVICE_INDEX": DEVICE_INDEX,
+                "HOTKEY_STR": HOTKEY_STR,
+                "SILENCE_DURATION": SILENCE_DURATION,
+                "PULSE_SOURCE_NAME": PULSE_SOURCE_NAME,
+                "PUSH_TO_HOLD": PUSH_TO_HOLD,
+                "CLIPBOARD_MODE": CLIPBOARD_MODE,
+                "LLM_ACTION": LLM_ACTION,
+                "LLM_INSTRUCTION": LLM_INSTRUCTION,
+                "OPENAI_BASE_URL": OPENAI_BASE_URL,
+                "OPENAI_CHAT_MODEL_ID": OPENAI_CHAT_MODEL_ID,
+                "OPENAI_API_KEY": OPENAI_API_KEY,
+                "WAKE_WORD": WAKE_WORD,
+                "COMMAND_URL": COMMAND_URL,
+                "INITIAL_PROMPT": INITIAL_PROMPT,
+                "BEEP_VOLUME": BEEP_VOLUME,
+                "BACKSPACE_AFTER_HOTKEY": BACKSPACE_AFTER_HOTKEY,
+            })
+        except Exception as _e:
+            print(f"[MIGRATE] save failed: {_e}", flush=True)
+    except Exception as _e:
+        print(f"[MIGRATE] failed: {_e}", flush=True)
 
 def _load_dotenv():
     env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
@@ -134,23 +264,37 @@ _load_dotenv()
 
 _config_lock = threading.Lock()
 
+
 class AudioRecorder:
     def __init__(self):
         self.frames = []
         self.recording = False
         self.rate = RATE
         self.device_index = None
-        self.pulse_source_name = None
+        self.pulse_source_name = PULSE_SOURCE_NAME
         self.stream_queue = queue.Queue()
         self.stream = None
 
         try:
             if DEVICE_INDEX is not None:
-                self.device_index = int(DEVICE_INDEX)
+                try:
+                    self.device_index = int(DEVICE_INDEX)
+                except (ValueError, TypeError):
+                    self.device_index = DEVICE_INDEX
             else:
                 self.device_index = sd.default.device[0]
 
-            device_info = sd.query_devices(self.device_index, "input")
+            # Validate device — handle stale hardcoded 9 or other invalid indices
+            try:
+                device_info = sd.query_devices(self.device_index, "input")
+            except Exception:
+                # If DEVICE_INDEX was a PulseAudio placeholder or invalid, resolve to real pulse/default device
+                if PULSE_SOURCE_NAME:
+                    self.device_index = _get_pulse_device_index()
+                    self.pulse_source_name = PULSE_SOURCE_NAME
+                else:
+                    self.device_index = _get_pulse_device_index()
+                device_info = sd.query_devices(self.device_index, "input")
             self.rate = int(device_info["default_samplerate"])
 
             try:
@@ -165,6 +309,11 @@ class AudioRecorder:
         except Exception as e:
             print(f"Error selecting device/rate: {e}")
             self.rate = 44100
+            # Ensure we have a usable fallback device
+            try:
+                self.device_index = _get_pulse_device_index()
+            except Exception:
+                pass
 
     def get_input_devices(self):
         devices = []
@@ -223,10 +372,11 @@ class AudioRecorder:
                     sd_idx = alsa_card_to_sd.get(int(alsa_card))
 
                 label = desc or src_name
-                # Always attach PulseAudio source name so the frontend can send it back;
-                # this allows routing through PulseAudio (device 9) for shared mic access.
+                # Attach PulseAudio source name so frontend can send it back;
+                # route through real PulseAudio device (pulse/default) for shared mic access.
+                pulse_idx = _get_pulse_device_index()
                 devices.append({
-                    "index": sd_idx if sd_idx is not None else 9,
+                    "index": sd_idx if sd_idx is not None else pulse_idx,
                     "name": f"(audio) {label}",
                     "pulse_source": src_name,
                 })
@@ -259,9 +409,9 @@ class AudioRecorder:
         old_pulse = os.environ.get("PULSE_SOURCE")
         if pulse_src:
             os.environ["PULSE_SOURCE"] = pulse_src
-            # Route through PulseAudio (index 9) instead of raw ALSA index so
+            # Route through real PulseAudio device (pulse/default) so
             # PulseAudio can multiplex the source across multiple apps (calls, Zoom, etc.).
-            target_device = 9
+            target_device = _get_pulse_device_index()
 
         while not self.stream_queue.empty():
             try:
@@ -392,6 +542,11 @@ class VoiceDictationApp:
         self.command_url = COMMAND_URL
         self.initial_prompt = INITIAL_PROMPT
         self.clipboard_mode = CLIPBOARD_MODE
+        self.stt_language = STT_LANGUAGE
+        self.stt_api_key = STT_API_KEY
+        self.openai_base_url = OPENAI_BASE_URL
+        self.openai_chat_model_id = OPENAI_CHAT_MODEL_ID
+        self.openai_api_key = OPENAI_API_KEY
         self._hotkey_pressed = False
         self._pth_timer = None
         self._typing_lock = threading.Lock()
@@ -399,6 +554,7 @@ class VoiceDictationApp:
         self._last_hotkey_time = 0.0
         self._correction_log = []
         self.beep_volume = BEEP_VOLUME
+        self.backspace_after_hotkey = BACKSPACE_AFTER_HOTKEY
 
     def _load_history(self):
         try:
@@ -530,6 +686,10 @@ class VoiceDictationApp:
             with open(file_path, "rb") as f:
                 files = {"file": (os.path.basename(file_path), f, "audio/wav")}
                 data = {"model": STT_MODEL}
+                # STT language: "auto" or empty = auto-detect (omit field)
+                lang = getattr(self, "stt_language", None) or STT_LANGUAGE
+                if lang and lang != "auto":
+                    data["language"] = lang
                 parts = []
                 if self.wake_word:
                     parts.append(self.wake_word)
@@ -551,9 +711,17 @@ class VoiceDictationApp:
                         prompt = "..." + prompt[-(MAX_PROMPT_CHARS - 3):]
                         print(f"[PROMPT] Truncated to {MAX_PROMPT_CHARS} chars", flush=True)
                     data["prompt"] = prompt
-                response = requests.post(
-                    STT_ENDPOINT, files=files, data=data, timeout=300
-                )
+                # STT API key — OpenAI-compatible Bearer token (only sent when configured)
+                _api_key = (getattr(self, "stt_api_key", None) or STT_API_KEY or "").strip()
+                if _api_key:
+                    response = requests.post(
+                        STT_ENDPOINT, files=files, data=data,
+                        headers={"Authorization": f"Bearer {_api_key}"}, timeout=300
+                    )
+                else:
+                    response = requests.post(
+                        STT_ENDPOINT, files=files, data=data, timeout=300
+                    )
                 response.raise_for_status()
                 return response.json().get("text", "").strip()
         except Exception as e:
@@ -744,6 +912,8 @@ class VoiceDictationApp:
         self,
         stt_endpoint=None,
         stt_model=None,
+        stt_language=None,
+        stt_api_key=None,
         streaming=None,
         hotkey=None,
         device_index=None,
@@ -754,15 +924,21 @@ class VoiceDictationApp:
         clipboard_mode=None,
         llm_action=None,
         llm_instruction=None,
+        openai_base_url=None,
+        openai_chat_model_id=None,
+        openai_api_key=None,
         wake_word=None,
         command_url=None,
         initial_prompt=None,
         beep_volume=None,
+        backspace_after_hotkey=None,
     ):
-        global STT_ENDPOINT, STT_MODEL, STREAMING_MODE, HOTKEY_STR
+        global STT_ENDPOINT, STT_MODEL, STT_LANGUAGE, STT_API_KEY, STREAMING_MODE, HOTKEY_STR
         global DEVICE_INDEX, SILENCE_THRESHOLD, BEEP_ENABLED, PULSE_SOURCE_NAME
         global PUSH_TO_HOLD, CLIPBOARD_MODE, LLM_ACTION, LLM_INSTRUCTION
+        global OPENAI_BASE_URL, OPENAI_CHAT_MODEL_ID, OPENAI_API_KEY
         global WAKE_WORD, COMMAND_URL, INITIAL_PROMPT, BEEP_VOLUME
+        global BACKSPACE_AFTER_HOTKEY
 
         need_hotkey_restart = False
 
@@ -771,6 +947,12 @@ class VoiceDictationApp:
                 STT_ENDPOINT = stt_endpoint
             if stt_model is not None:
                 STT_MODEL = stt_model
+            if stt_language is not None:
+                STT_LANGUAGE = stt_language.strip() or "auto"
+                self.stt_language = STT_LANGUAGE
+            if stt_api_key is not None:
+                STT_API_KEY = stt_api_key.strip()
+                self.stt_api_key = STT_API_KEY
             if streaming is not None:
                 STREAMING_MODE = bool(streaming)
             if beep_enabled is not None:
@@ -807,6 +989,10 @@ class VoiceDictationApp:
                 CLIPBOARD_MODE = bool(clipboard_mode)
                 self.clipboard_mode = CLIPBOARD_MODE
 
+            if backspace_after_hotkey is not None:
+                BACKSPACE_AFTER_HOTKEY = bool(backspace_after_hotkey)
+                self.backspace_after_hotkey = BACKSPACE_AFTER_HOTKEY
+
             if llm_action is not None:
                 LLM_ACTION = llm_action
                 self.llm_action = LLM_ACTION
@@ -814,6 +1000,16 @@ class VoiceDictationApp:
             if llm_instruction is not None:
                 LLM_INSTRUCTION = llm_instruction
                 self.llm_instruction = LLM_INSTRUCTION
+
+            if openai_base_url is not None:
+                OPENAI_BASE_URL = openai_base_url.strip()
+                self.openai_base_url = OPENAI_BASE_URL
+            if openai_chat_model_id is not None:
+                OPENAI_CHAT_MODEL_ID = openai_chat_model_id.strip()
+                self.openai_chat_model_id = OPENAI_CHAT_MODEL_ID
+            if openai_api_key is not None:
+                OPENAI_API_KEY = openai_api_key.strip()
+                self.openai_api_key = OPENAI_API_KEY
 
             if wake_word is not None:
                 WAKE_WORD = wake_word.strip()
@@ -839,6 +1035,8 @@ class VoiceDictationApp:
             {
                 "STT_ENDPOINT": STT_ENDPOINT,
                 "STT_MODEL": STT_MODEL,
+                "STT_LANGUAGE": STT_LANGUAGE,
+                "STT_API_KEY": STT_API_KEY,
                 "STREAMING_MODE": STREAMING_MODE,
                 "BEEP_ENABLED": BEEP_ENABLED,
                 "SILENCE_THRESHOLD": SILENCE_THRESHOLD,
@@ -850,10 +1048,14 @@ class VoiceDictationApp:
                 "CLIPBOARD_MODE": CLIPBOARD_MODE,
                 "LLM_ACTION": LLM_ACTION,
                 "LLM_INSTRUCTION": LLM_INSTRUCTION,
+                "OPENAI_BASE_URL": OPENAI_BASE_URL,
+                "OPENAI_CHAT_MODEL_ID": OPENAI_CHAT_MODEL_ID,
+                "OPENAI_API_KEY": OPENAI_API_KEY,
                 "WAKE_WORD": WAKE_WORD,
                 "COMMAND_URL": COMMAND_URL,
                 "INITIAL_PROMPT": INITIAL_PROMPT,
                 "BEEP_VOLUME": BEEP_VOLUME,
+                "BACKSPACE_AFTER_HOTKEY": BACKSPACE_AFTER_HOTKEY,
             }
         )
 
@@ -1087,11 +1289,12 @@ class VoiceDictationApp:
                 self._push_to_hold_start()
         else:
             self.toggle_recording()
-        try:
-            subprocess.run(["xdotool", "key", "--clearmodifiers", "BackSpace"],
-                          capture_output=True, timeout=1)
-        except Exception:
-            pass
+        if self.backspace_after_hotkey:
+            try:
+                subprocess.run(["xdotool", "key", "--clearmodifiers", "BackSpace"],
+                              capture_output=True, timeout=1)
+            except Exception:
+                pass
 
     def stop_service(self):
         with self._lock:
@@ -1149,8 +1352,8 @@ class VoiceDictationApp:
         old_pulse = os.environ.get("PULSE_SOURCE")
         if pulse_src:
             os.environ["PULSE_SOURCE"] = pulse_src
-            # Use PulseAudio device (index 9) for shared access, same as recorder.start()
-            target_device = 9
+            # Use real PulseAudio device for shared access, same as recorder.start()
+            target_device = _get_pulse_device_index()
 
         try:
             device_info = sd.query_devices(target_device, "input")
@@ -1226,8 +1429,8 @@ class VoiceDictationApp:
             old_pulse = os.environ.get("PULSE_SOURCE")
             if pulse_src:
                 os.environ["PULSE_SOURCE"] = pulse_src
-                # Use PulseAudio device for shared access, same as recorder.start()
-                target_device = 9
+                # Use real PulseAudio device for shared access, same as recorder.start()
+                target_device = _get_pulse_device_index()
 
             device_info = sd.query_devices(target_device, "input")
             default_rate = int(device_info["default_samplerate"])
@@ -1256,6 +1459,9 @@ class VoiceDictationApp:
             with open(test_file, "rb") as f:
                 files = {"file": ("stt_test.wav", f, "audio/wav")}
                 data = {"model": STT_MODEL}
+                lang = getattr(self, "stt_language", None) or STT_LANGUAGE
+                if lang and lang != "auto":
+                    data["language"] = lang
                 parts = []
                 if self.wake_word:
                     parts.append(self.wake_word)
@@ -1277,7 +1483,11 @@ class VoiceDictationApp:
                         prompt = "..." + prompt[-(MAX_PROMPT_CHARS - 3):]
                         print(f"[PROMPT] Truncated to {MAX_PROMPT_CHARS} chars", flush=True)
                     data["prompt"] = prompt
-                resp = requests.post(STT_ENDPOINT, files=files, data=data, timeout=30)
+                _api_key2 = (getattr(self, "stt_api_key", None) or STT_API_KEY or "").strip()
+                if _api_key2:
+                    resp = requests.post(STT_ENDPOINT, files=files, data=data, headers={"Authorization": f"Bearer {_api_key2}"}, timeout=30)
+                else:
+                    resp = requests.post(STT_ENDPOINT, files=files, data=data, timeout=30)
                 elapsed = time.time() - start
                 resp.raise_for_status()
                 result_text = resp.json().get("text", "").strip()

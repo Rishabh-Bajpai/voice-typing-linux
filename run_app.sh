@@ -6,19 +6,19 @@ cd "$PROJECT_DIR"
 
 # Auto-detect conda
 CONDA_CMD="$(command -v conda || true)"
-if [ -z "$CONDA_CMD" ] && [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/miniconda3/etc/profile.d/conda.sh"
-elif [ -z "$CONDA_CMD" ] && [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/anaconda3/etc/profile.d/conda.sh"
+if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    . "$HOME/miniconda3/etc/profile.d/conda.sh"
+elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+    . "$HOME/anaconda3/etc/profile.d/conda.sh"
 elif [ -n "$CONDA_CMD" ]; then
-    # conda is on PATH already, good
-    :
+    echo "Conda found but conda.sh not found at expected paths."
+    exit 1
 else
     echo "Conda not found. Install Miniconda or Anaconda first."
     exit 1
 fi
 
-ENV_NAME="${CONDA_DEFAULT_ENV:-voiceTyping}"
+ENV_NAME="voiceTyping"
 
 if conda env list | grep -q "$ENV_NAME"; then
     conda activate "$ENV_NAME"

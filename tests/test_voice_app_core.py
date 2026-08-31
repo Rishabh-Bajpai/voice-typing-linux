@@ -54,8 +54,12 @@ def test_transcribe_success_sends_model_payload(vd, tmp_path, monkeypatch):
     app = vd.VoiceDictationApp()
     app.wake_word = "chanakya"
     app.initial_prompt = ""
+    app.stt_language = "auto"
+    app.stt_api_key = ""
     vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
     vd.STT_MODEL = "generic-model"
+    vd.STT_LANGUAGE = "auto"
+    vd.STT_API_KEY = ""
 
     audio = tmp_path / "clip.wav"
     audio.write_bytes(b"fake-wav")
@@ -99,8 +103,12 @@ def test_transcribe_initial_prompt_included(vd, tmp_path, monkeypatch):
     app = vd.VoiceDictationApp()
     app.wake_word = "chanakya"
     app.initial_prompt = "Transcribe these terms: Kubernetes, gRPC"
+    app.stt_language = "auto"
+    app.stt_api_key = ""
     vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
     vd.STT_MODEL = "generic-model"
+    vd.STT_LANGUAGE = "auto"
+    vd.STT_API_KEY = ""
 
     audio = tmp_path / "clip.wav"
     audio.write_bytes(b"fake-wav")
@@ -126,8 +134,12 @@ def test_transcribe_initial_prompt_truncation(vd, tmp_path, monkeypatch):
     app = vd.VoiceDictationApp()
     app.wake_word = "chanakya"
     app.initial_prompt = "word, " * 500
+    app.stt_language = "auto"
+    app.stt_api_key = ""
     vd.STT_ENDPOINT = "http://localhost:1234/v1/audio/transcriptions"
     vd.STT_MODEL = "generic-model"
+    vd.STT_LANGUAGE = "auto"
+    vd.STT_API_KEY = ""
 
     audio = tmp_path / "clip.wav"
     audio.write_bytes(b"fake-wav")

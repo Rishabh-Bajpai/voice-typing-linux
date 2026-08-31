@@ -1273,29 +1273,46 @@ HTML_TEMPLATE = """
             <div class="form-section">
                 <div class="input-group full-width">
                     <label>Microphone Device</label>
-                    <select id="deviceSelect" onchange="autoSave()">
+                    <select id="deviceSelect" onchange="autoSave()" title="Select which microphone or audio source to use for voice input. Lists all PulseAudio and ALSA devices detected on the system. If your mic shows as '(audio) ...', it is being routed through PulseAudio for shared access with other applications like calls.">
                         <option value="">Loading devices...</option>
                     </select>
                 </div>
                 
                 <div class="input-group full-width">
                     <label>STT Endpoint</label>
-                    <input type="text" id="sttEndpoint" value="{{ stt_endpoint }}" onchange="autoSave()">
+                    <input type="text" id="sttEndpoint" value="{{ stt_endpoint }}" onchange="autoSave()" title="URL of the Speech-to-Text server (must be OpenAI-compatible /v1/audio/transcriptions endpoint). Default points to a local faster-whisper-server. You can use any hosted STT API that follows the OpenAI Whisper API format.">
+                </div>
+
+                <div class="input-group full-width">
+                    <label>STT API Key</label>
+                    <div style="display:flex;gap:0.5rem;">
+                        <input type="password" id="sttApiKey" value="{{ stt_api_key }}" placeholder="leave empty for no auth" onchange="autoSave()" style="flex:1;" title="API key for STT endpoint if required (OpenAI, Groq, etc.). Sent as Authorization: Bearer header. Leave empty for local faster-whisper-server which needs no auth. Saved persistently to config.json (plain text).">
+                        <button type="button" onclick="toggleSttApiKeyVisibility()" id="toggleSttApiKeyBtn" style="padding:0.5rem 0.85rem;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text-dim);cursor:pointer;" title="Show/hide STT API key">👁</button>
+                    </div>
                 </div>
 
                 <div class="input-group">
                     <label>STT Model</label>
-                    <input type="text" id="sttModel" value="{{ stt_model }}" onchange="autoSave()">
+                    <input type="text" id="sttModel" value="{{ stt_model }}" onchange="autoSave()" title="Model identifier passed to the STT endpoint. For faster-whisper-server, use values like 'Systran/faster-whisper-medium.en' or 'base', 'small', 'medium', 'large-v3'. Larger models are more accurate but slower.">
+                </div>
+
+                <div class="input-group">
+                    <label>STT Language</label>
+                    <select id="sttLanguage" onchange="autoSave()" title="Language for speech-to-text. Auto detects spoken language, or force a specific language to improve accuracy. For Systran/faster-whisper-medium.en only 'en' and 'auto' are valid; for multilingual Systran/faster-whisper-medium any language works. Auto sends no language parameter for auto-detection.">
+                        {% for code, name in stt_languages.items() %}
+                        <option value="{{ code }}" {% if stt_language == code %}selected{% endif %}>{{ name }} ({{ code }})</option>
+                        {% endfor %}
+                    </select>
                 </div>
 
                 <div class="input-group">
                     <label>Hotkey</label>
-                    <input type="text" id="hotkey" value="{{ hotkey }}" onchange="autoSave()">
+                    <input type="text" id="hotkey" value="{{ hotkey }}" onchange="autoSave()" title="Global keyboard shortcut to toggle recording. Uses pynput syntax: <cmd>+<shift>+s, <ctrl>+<alt>+space, etc. The last key is the trigger. After changing the hotkey, the daemon restarts automatically. If the hotkey stops working after login/sleep, use the Reset button.">
                 </div>
 
                 <div class="input-group">
                     <label>Mode</label>
-                    <select id="streamingMode" onchange="autoSave()">
+                    <select id="streamingMode" onchange="autoSave()" title="Streaming mode transcribes while you speak and types each utterance as soon as silence is detected. Batch mode records the full audio and transcribes once when you stop. Streaming is more responsive but may produce partial sentences. Batch mode is required for LLM post-processing features.">
                         <option value="1" {% if streaming %}selected{% endif %}>Streaming (Real-time)</option>
                         <option value="0" {% if not streaming %}selected{% endif %}>Batch (Once on stop)</option>
                     </select>
@@ -1303,12 +1320,12 @@ HTML_TEMPLATE = """
 
                 <div class="input-group">
                     <label>VAD Threshold</label>
-                    <input type="number" step="0.005" id="silenceThreshold" value="{{ silence_threshold }}" onchange="autoSave()">
+                    <input type="number" step="0.005" id="silenceThreshold" value="{{ silence_threshold }}" onchange="autoSave()" title="Voice Activity Detection sensitivity. Lower values (0.005-0.01) are more sensitive and pick up quieter speech. Higher values (0.02-0.03) require louder input, useful in noisy environments. Adjust if the mic is cutting off or picking up too much background.">
                 </div>
 
                 <div class="input-group">
                     <label>Sound Effects</label>
-                    <select id="beepEnabled" onchange="autoSave()">
+                    <select id="beepEnabled" onchange="autoSave()" title="Play a short beep sound when recording starts (high pitch) and stops (low pitch). Useful for audible feedback that the system heard you. Can be muted if the beeps are distracting.">
                         <option value="1" {% if beep_enabled %}selected{% endif %}>Enabled (Beeps)</option>
                         <option value="0" {% if not beep_enabled %}selected{% endif %}>Muted</option>
                     </select>
@@ -1317,7 +1334,7 @@ HTML_TEMPLATE = """
                 <div class="input-group">
                     <label>Beep Volume</label>
                     <div class="volume-label">
-                        <input type="range" class="volume-slider" id="beepVolume" min="0" max="100" value="{{ beep_volume * 100 }}" oninput="updateVolumeLabel(this.value); autoSave()">
+                        <input type="range" class="volume-slider" id="beepVolume" min="0" max="100" value="{{ beep_volume * 100 }}" oninput="updateVolumeLabel(this.value); autoSave()" title="Controls the loudness of the start/stop beep sounds independently of system volume. Set to 0% to silence beeps while keeping Sound Effects enabled (useful if you want visual-only indicators).">
                         <span id="volumeLabel">{{ (beep_volume * 100) | round(0) | int }}%</span>
                     </div>
                 </div>
@@ -1328,7 +1345,7 @@ HTML_TEMPLATE = """
 
                 <div class="input-group" id="llmActionGroup">
                     <label>LLM Post-Process</label>
-                    <select id="llmAction" onchange="onLlmActionChange()">
+                    <select id="llmAction" onchange="onLlmActionChange()" title="Apply an LLM to the transcribed text before output. Grammar Fix cleans punctuation and capitalization. Translate converts to another language. Custom lets you provide any instruction (e.g. 'Summarize', 'Make bullet points'). Requires Batch mode and an OpenAI-compatible LLM endpoint configured below (persistent, overrides .env).">
                         <option value="off">Off</option>
                         <option value="grammar">Grammar Fix</option>
                         <option value="translate">Translate</option>
@@ -1338,7 +1355,7 @@ HTML_TEMPLATE = """
 
                 <div class="input-group" id="llmLangGroup" style="display:none">
                     <label>Translate Language</label>
-                    <select id="llmLang" onchange="autoSave()">
+                    <select id="llmLang" onchange="autoSave()" title="Target language for the Translate LLM action. The transcribed text will be translated from its original language into the selected language.">
                         <option value="Hindi">Hindi</option>
                         <option value="English">English</option>
                         <option value="French">French</option>
@@ -1352,40 +1369,66 @@ HTML_TEMPLATE = """
 
                 <div class="input-group" id="llmCustomGroup" style="display:none">
                     <label>Custom Prompt</label>
-                    <input type="text" id="llmCustomPrompt" placeholder="e.g. Convert to bullet points" onchange="autoSave()">
+                    <input type="text" id="llmCustomPrompt" placeholder="e.g. Convert to bullet points" onchange="autoSave()" title="Your own instruction for the LLM when 'Custom' action is selected. Examples: 'Summarize this in one sentence', 'Format as a to-do list', 'Make this more formal'. The LLM will process the transcribed text according to this instruction.">
+                </div>
+
+                <div class="input-group full-width" style="display:flex;gap:0.5rem;align-items:center;margin-top:0.25rem;padding-top:0.75rem;border-top:1px dashed rgba(255,255,255,0.08);">
+                    <span style="font-size:0.75rem;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:0.05em;">LLM Credentials (persistent)</span>
+                    <span style="font-size:0.7rem;color:var(--text-dim);">— saved to config.json, overrides .env on next load</span>
+                </div>
+
+                <div class="input-group">
+                    <label>LLM Base URL</label>
+                    <input type="text" id="llmBaseUrl" value="{{ openai_base_url }}" placeholder="http://localhost:1234/v1" onchange="autoSave()" title="OpenAI-compatible LLM endpoint base URL. For local LM Studio/Ollama use http://localhost:1234/v1 or http://localhost:11434/v1. Must expose /chat/completions. Saved persistently to config.json.">
+                </div>
+
+                <div class="input-group">
+                    <label>LLM Model ID</label>
+                    <input type="text" id="llmModel" value="{{ openai_chat_model_id }}" placeholder="qwen/qwen3-6b" onchange="autoSave()" title="Model identifier sent to the LLM endpoint as 'model'. For local servers any string your server accepts. For OpenAI use gpt-4o-mini etc. Saved persistently.">
+                </div>
+
+                <div class="input-group full-width">
+                    <label>LLM API Key</label>
+                    <div style="display:flex;gap:0.5rem;">
+                        <input type="password" id="llmApiKey" value="{{ openai_api_key }}" placeholder="not-needed for local" onchange="autoSave()" title="API key for the LLM endpoint. For local endpoints often 'not-needed'. For OpenAI use sk-.... Saved persistently to config.json (plain text). Leave empty to keep existing, or clear to remove." style="flex:1;">
+                        <button type="button" onclick="toggleApiKeyVisibility()" id="toggleApiKeyBtn" style="padding:0.5rem 0.85rem;border-radius:10px;background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--text-dim);cursor:pointer;" title="Show/hide API key">👁</button>
+                    </div>
                 </div>
 
                 <div class="input-group">
                     <label>Wake Word</label>
-                    <input type="text" id="wakeWord" value="{{ wake_word }}" placeholder="chanakya" onchange="autoSave()">
+                    <input type="text" id="wakeWord" value="{{ wake_word }}" placeholder="chanakya" onchange="autoSave()" title="A special word that, when spoken as the first word of a dictation, triggers command mode. The wake word is stripped from the text and the remainder is sent to the Command URL instead of being typed. Useful for voice-controlled automation (e.g. saying 'chanakya open terminal' sends 'open terminal' to your webhook). Case-insensitive.">
                 </div>
                 <div class="input-group">
                     <label>Command URL</label>
-                    <input type="text" id="commandUrl" value="{{ command_url }}" placeholder="https://ntfy.example.org/" onchange="autoSave()">
+                    <input type="text" id="commandUrl" value="{{ command_url }}" placeholder="https://ntfy.example.org/" onchange="autoSave()" title="HTTP endpoint that receives wake word commands as raw POST body. When the wake word is detected, the rest of the transcribed text is sent here instead of being typed. Works with ntfy.sh for push notifications, Home Assistant webhooks, or any custom automation endpoint.">
                 </div>
                 <div class="input-group">
                     <label>Initial Prompt</label>
-                    <div class="chip-input" id="chipContainer">
+                    <div class="chip-input" id="chipContainer" title="Words and phrases to bias the STT model toward. Type a word and press Enter or comma to add it as a chip. These are sent as the 'prompt' parameter to the STT API, helping it recognize domain-specific terms, names, and jargon. Natural sentence framing (e.g. 'The following terms are: Kubernetes, gRPC') reduces false positives over bare word lists. Maximum 800 characters.">
                         <div class="chip-list" id="chipList"></div>
                         <input type="text" id="chipInput" placeholder="Type a word and press Enter" autocomplete="off">
                     </div>
                     <div class="prompt-counter" id="promptCounter">0 / 800 characters</div>
                 </div>
 
-                <div class="input-group full-width" style="grid-column:span 2;display:flex;gap:1rem;">
-                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                <div class="input-group full-width" style="grid-column:span 2;display:flex;gap:1rem;flex-wrap:wrap;">
+                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;" title="When enabled, you hold the hotkey down to record and release it to stop. Useful for brief dictations where you want precise control over when recording ends. When disabled, the hotkey toggles recording on/off with each press.">
                         <input type="checkbox" id="pushToHold" onchange="autoSave()" {% if push_to_hold %}checked{% endif %}> Push-to-Hold
                     </label>
-                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;" title="When checked, transcribed text is typed directly into the focused document using xdotool (or clipboard paste as fallback). When unchecked, text is copied to the system clipboard instead of being typed. Uncheck if you only want to paste manually.">
                         <input type="checkbox" id="clipboardMode" onchange="autoSave()" {% if clipboard_mode %}checked{% endif %}> Type into document
+                    </label>
+                    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;" title="When checked, a BackSpace keystroke is sent immediately after the hotkey is pressed to erase the stray character that some systems inject when the hotkey triggers. If you notice the hotkey deleting a letter from your text, uncheck this. Only relevant for hotkeys that include a letter key like <ctrl>+<shift>+s.">
+                        <input type="checkbox" id="backspaceAfterHotkey" onchange="autoSave()" {% if backspace_after_hotkey %}checked{% endif %}> BackSpace after hotkey
                     </label>
                 </div>
             </div>
 
             <div class="controls">
-                <button onclick="toggleService()" class="btn-primary" id="toggleBtn">Start Daemon</button>
-                <button onclick="toggleRecording()" class="btn-secondary" id="recBtn">Manual Dictate</button>
-                <button onclick="toggleMicTest()" class="btn-secondary" id="micTestBtn">Test Mic</button>
+                <button onclick="toggleService()" class="btn-primary" id="toggleBtn" title="Start or stop the voice typing daemon (hotkey listener). When active, the global hotkey will toggle recording. The daemon must be running for hotkey dictation to work. Manual Dictate and Test STT work independently.">Start Daemon</button>
+                <button onclick="toggleRecording()" class="btn-secondary" id="recBtn" title="Manually start/stop a recording session without using the hotkey. Useful for testing or when the hotkey is not available. Same as pressing the hotkey once in toggle mode.">Manual Dictate</button>
+                <button onclick="toggleMicTest()" class="btn-secondary" id="micTestBtn" title="Open the microphone level meter to test your audio input. Speaks for 5 seconds and shows a real-time level bar. Use this to verify your mic is working and adjust the VAD threshold based on the noise floor.">Test Mic</button>
             </div>
 
             <div class="preview-box" id="previewBox" style="display:none;margin-top:1rem;padding:0.75rem 1rem;background:rgba(0,0,0,0.25);border-radius:12px;border:1px solid var(--border);font-size:0.9rem;min-height:1.2rem;">
@@ -1593,13 +1636,22 @@ HTML_TEMPLATE = """
                 const sel = document.getElementById('deviceSelect');
                 sel.innerHTML = '';
                 const activeIdx = {{ active_device if active_device is not none else -1 }};
+                const activePulse = "{{ active_pulse_source or '' }}";
                 let hadActive = false;
                 devices.forEach(d => {
                     const opt = document.createElement('option');
                     opt.value = d.index;
                     opt.text = d.name;
                     opt.dataset.pulseSource = d.pulse_source || '';
-                    if (d.index == activeIdx) { opt.selected = true; hadActive = true; }
+                    // Match by index and, for PulseAudio devices, by pulse_source to avoid stale 9 -> wrong device
+                    const idxMatch = d.index == activeIdx;
+                    const pulseMatch = activePulse ? (d.pulse_source || '') === activePulse : true;
+                    // For pulse devices sharing the same ALSA index (e.g., all at 7), require pulse_source match
+                    const isPulseDevice = !!d.pulse_source;
+                    const shouldSelect = isPulseDevice ? (idxMatch && pulseMatch) : idxMatch;
+                    // Fallback: if activeIdx is stale 9 (old hardcoded) and pulse matches, select it
+                    const isStaleFallback = activeIdx === 9 && activePulse && (d.pulse_source || '') === activePulse;
+                    if (shouldSelect || isStaleFallback) { opt.selected = true; hadActive = true; }
                     sel.appendChild(opt);
                 });
                 if (!hadActive && devices.length > 0) {
@@ -1669,14 +1721,37 @@ HTML_TEMPLATE = """
             autoSave();
         }
 
+        function toggleApiKeyVisibility() {
+            const inp = document.getElementById('llmApiKey');
+            const btn = document.getElementById('toggleApiKeyBtn');
+            if (!inp) return;
+            if (inp.type === 'password') { inp.type = 'text'; if (btn) btn.textContent = '🙈'; }
+            else { inp.type = 'password'; if (btn) btn.textContent = '👁'; }
+        }
+
+        function toggleSttApiKeyVisibility() {
+            const inp = document.getElementById('sttApiKey');
+            const btn = document.getElementById('toggleSttApiKeyBtn');
+            if (!inp) return;
+            if (inp.type === 'password') { inp.type = 'text'; if (btn) btn.textContent = '🙈'; }
+            else { inp.type = 'password'; if (btn) btn.textContent = '👁'; }
+        }
+
         async function autoSave() {
             if (!configReady) return;
             const devSelect = document.getElementById('deviceSelect');
             const devOpt = devSelect.selectedOptions[0];
             const pulseSource = devOpt ? devOpt.dataset.pulseSource || '' : '';
+            const sttLangEl = document.getElementById('sttLanguage');
+            const sttKeyEl = document.getElementById('sttApiKey');
+            const llmBaseEl = document.getElementById('llmBaseUrl');
+            const llmModelEl = document.getElementById('llmModel');
+            const llmKeyEl = document.getElementById('llmApiKey');
             const settings = {
                 stt_endpoint: document.getElementById('sttEndpoint').value,
                 stt_model: document.getElementById('sttModel').value,
+                stt_language: sttLangEl ? sttLangEl.value : 'auto',
+                stt_api_key: sttKeyEl ? sttKeyEl.value : '',
                 hotkey: document.getElementById('hotkey').value,
                 streaming: document.getElementById('streamingMode').value === "1",
                 device_index: devSelect.value,
@@ -1686,8 +1761,12 @@ HTML_TEMPLATE = """
                 beep_volume: parseInt(document.getElementById('beepVolume').value) / 100,
                 llm_action: document.getElementById('llmAction').value,
                 llm_instruction: getLlmInstruction(),
+                openai_base_url: llmBaseEl ? llmBaseEl.value : '',
+                openai_chat_model_id: llmModelEl ? llmModelEl.value : '',
+                openai_api_key: llmKeyEl ? llmKeyEl.value : '',
                 push_to_hold: document.getElementById('pushToHold').checked,
                 clipboard_mode: document.getElementById('clipboardMode').checked,
+                backspace_after_hotkey: document.getElementById('backspaceAfterHotkey').checked,
                 wake_word: document.getElementById('wakeWord').value,
                 command_url: document.getElementById('commandUrl').value,
                 initial_prompt: initialPromptWords.join(', '),
@@ -2251,6 +2330,17 @@ HTML_TEMPLATE = """
                 document.getElementById('llmCustomPrompt').value = (data.llm_action === 'custom' ? data.llm_instruction : '') || '';
                 document.getElementById('wakeWord').value = data.wake_word || 'chanakya';
                 document.getElementById('commandUrl').value = data.command_url || '';
+                // persistent LLM credentials
+                if (document.getElementById('llmBaseUrl')) document.getElementById('llmBaseUrl').value = data.openai_base_url || '';
+                if (document.getElementById('llmModel')) document.getElementById('llmModel').value = data.openai_chat_model_id || '';
+                if (document.getElementById('llmApiKey')) document.getElementById('llmApiKey').value = data.openai_api_key || '';
+                // STT language + API key (also via /llm_config for tray compat)
+                const sttLangSel = document.getElementById('sttLanguage');
+                if (sttLangSel && data.stt_language) sttLangSel.value = data.stt_language;
+                else if (sttLangSel && data.stt_language === undefined) {
+                    // fallback: fetch /config if needed
+                }
+                if (document.getElementById('sttApiKey')) document.getElementById('sttApiKey').value = data.stt_api_key || data.sttApiKey || '';
                 initialPromptWords = (data.initial_prompt || '').split(',').map(w => w.trim()).filter(w => w);
                 renderChips();
                 updatePromptCharCount();
@@ -2299,14 +2389,22 @@ def index():
         HTML_TEMPLATE,
         stt_endpoint=voice_dictation.STT_ENDPOINT,
         stt_model=voice_dictation.STT_MODEL,
+        stt_language=voice_dictation.STT_LANGUAGE,
+        stt_api_key=voice_dictation.STT_API_KEY,
+        stt_languages=voice_dictation.STT_LANGUAGES,
         streaming=voice_dictation.STREAMING_MODE,
         hotkey=voice_dictation.HOTKEY_STR,
         active_device=voice_dictation.DEVICE_INDEX,
+        active_pulse_source=voice_dictation.PULSE_SOURCE_NAME,
         silence_threshold=voice_dictation.SILENCE_THRESHOLD,
         beep_enabled=voice_dictation.BEEP_ENABLED,
         beep_volume=voice_dictation.BEEP_VOLUME,
         push_to_hold=dict_app.push_to_hold,
         clipboard_mode=dict_app.clipboard_mode,
+        backspace_after_hotkey=voice_dictation.BACKSPACE_AFTER_HOTKEY,
+        openai_base_url=voice_dictation.OPENAI_BASE_URL,
+        openai_chat_model_id=voice_dictation.OPENAI_CHAT_MODEL_ID,
+        openai_api_key=voice_dictation.OPENAI_API_KEY,
         wake_word=voice_dictation.WAKE_WORD,
         command_url=voice_dictation.COMMAND_URL,
         initial_prompt=voice_dictation.INITIAL_PROMPT,
@@ -2324,6 +2422,8 @@ def save_settings():
     dict_app.update_config(
         stt_endpoint=data.get("stt_endpoint"),
         stt_model=data.get("stt_model"),
+        stt_language=data.get("stt_language"),
+        stt_api_key=data.get("stt_api_key"),
         streaming=data.get("streaming"),
         hotkey=data.get("hotkey"),
         device_index=data.get("device_index"),
@@ -2333,8 +2433,12 @@ def save_settings():
         pulse_source=data.get("pulse_source"),
         push_to_hold=data.get("push_to_hold"),
         clipboard_mode=data.get("clipboard_mode"),
+        backspace_after_hotkey=data.get("backspace_after_hotkey"),
         llm_action=data.get("llm_action"),
         llm_instruction=data.get("llm_instruction"),
+        openai_base_url=data.get("openai_base_url"),
+        openai_chat_model_id=data.get("openai_chat_model_id"),
+        openai_api_key=data.get("openai_api_key"),
         wake_word=data.get("wake_word"),
         command_url=data.get("command_url"),
         initial_prompt=data.get("initial_prompt"),
@@ -2407,19 +2511,31 @@ def test_stt():
 def llm_config():
     if request.method == "POST":
         data = request.json
-        import voice_dictation as vd
-        vd.OPENAI_BASE_URL = data.get("openai_base_url", vd.OPENAI_BASE_URL)
-        vd.OPENAI_CHAT_MODEL_ID = data.get("openai_chat_model_id", vd.OPENAI_CHAT_MODEL_ID)
-        vd.OPENAI_API_KEY = data.get("openai_api_key", vd.OPENAI_API_KEY)
-        dict_app.llm_action = data.get("llm_action", dict_app.llm_action)
-        dict_app.llm_instruction = data.get("llm_instruction", dict_app.llm_instruction)
-        dict_app.push_to_hold = data.get("push_to_hold", dict_app.push_to_hold)
-        dict_app.clipboard_mode = data.get("clipboard_mode", dict_app.clipboard_mode)
+        # Persist via update_config so config.json is updated (tray compat)
+        dict_app.update_config(
+            openai_base_url=data.get("openai_base_url"),
+            openai_chat_model_id=data.get("openai_chat_model_id"),
+            openai_api_key=data.get("openai_api_key"),
+            llm_action=data.get("llm_action"),
+            llm_instruction=data.get("llm_instruction"),
+            stt_language=data.get("stt_language"),
+            stt_api_key=data.get("stt_api_key", data.get("sttApiKey")),
+            push_to_hold=data.get("push_to_hold"),
+            clipboard_mode=data.get("clipboard_mode"),
+            wake_word=data.get("wake_word"),
+            command_url=data.get("command_url"),
+            initial_prompt=data.get("initial_prompt"),
+        )
+        # Also allow tray to update only subset without overwriting others with None
+        # update_config already handles None = no change, so safe
         return jsonify({"success": True})
     import voice_dictation as vd
     return jsonify({
         "openai_base_url": vd.OPENAI_BASE_URL,
         "openai_chat_model_id": vd.OPENAI_CHAT_MODEL_ID,
+        "openai_api_key": vd.OPENAI_API_KEY,
+        "stt_api_key": vd.STT_API_KEY,
+        "stt_language": vd.STT_LANGUAGE,
         "llm_action": dict_app.llm_action,
         "llm_instruction": dict_app.llm_instruction,
         "push_to_hold": dict_app.push_to_hold,

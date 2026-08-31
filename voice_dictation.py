@@ -1206,13 +1206,14 @@ class VoiceDictationApp:
                         print(f"[STREAM][CORR] '{a['pattern']}' -> '{a['replacement']}'", flush=True)
                     text = corrected
                 print(f"[STREAM] '{text}'", flush=True)
-                self.transcription_history.append({
-                    "text": text,
-                    "time": time.strftime("%H:%M:%S"),
-                    "source": "streaming",
-                })
-                if len(self.transcription_history) > 50:
-                    self.transcription_history.pop(0)
+                with self._history_lock:
+                    self.transcription_history.append({
+                        "text": text,
+                        "time": time.strftime("%H:%M:%S"),
+                        "source": "streaming",
+                    })
+                    if len(self.transcription_history) > 50:
+                        self.transcription_history.pop(0)
                 self._save_history()
                 self.type_text(text + " ")
             try:

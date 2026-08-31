@@ -131,6 +131,11 @@ async def handle(req: Request):
 
 **Express (Node.js):**
 ```javascript
+const express = require("express");
+const app = express();
+// The app sends text/plain, so use express.text() (not express.json())
+app.use(express.text({ type: "text/plain" }));
+
 app.post("/commands", (req, res) => {
   console.log("Received:", req.body);
   res.send("OK");

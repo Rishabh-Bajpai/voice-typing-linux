@@ -103,28 +103,36 @@ def apply_corrections(text, corrections):
             flags = 0 if corr.get("case_sensitive", False) else re.IGNORECASE
             exceptions = corr.get("exceptions", [])
 
+            prefix_group = None
             if corr.get("whole_word", True):
                 if cl and cr:
-                    regex = rf'(?<={cl}\s+){escaped}(?=\s+{cr})'
+                    regex = rf'({cl}\s+)({escaped})(?=\s+{cr})'
+                    prefix_group = 1
+                    pattern_group = 2
                 elif cl:
-                    regex = rf'(?<={cl}\s+){escaped}'
+                    regex = rf'({cl}\s+)({escaped})'
+                    prefix_group = 1
+                    pattern_group = 2
                 elif cr:
-                    regex = rf'{escaped}(?=\s+{cr})'
+                    regex = rf'({escaped})(?=\s+{cr})'
+                    pattern_group = 1
                 else:
-                    regex = rf'\b{escaped}\b'
+                    regex = rf'\b({escaped})\b'
+                    pattern_group = 1
             else:
                 regex = escaped
+                pattern_group = 0
 
             corr_id = corr.get("id", "")
             actual_count = [0]
 
             def _replacer(m):
-                if _match_has_exception(m.string, m.start(), m.end(), exceptions):
+                if _match_has_exception(m.string, m.start(pattern_group), m.end(pattern_group), exceptions):
                     return m.group(0)
                 corr["hits"] = corr.get("hits", 0) + 1
                 corr["last_hit"] = time.time()
                 actual_count[0] += 1
-                return replacement
+                return (m.group(prefix_group) + replacement) if prefix_group is not None else replacement
 
             new_result = re.sub(regex, _replacer, result, flags=flags)
             if actual_count[0] > 0:

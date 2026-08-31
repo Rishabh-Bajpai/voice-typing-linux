@@ -2372,8 +2372,8 @@ HTML_TEMPLATE = """
         setInterval(updateStatus, 1000);
         setInterval(updateHistory, 2000);
         setInterval(updatePreview, 500);
-        setInterval(loadCorrections, 10000);
-        setInterval(loadCorrectionLog, 3000);
+        setInterval(function() { if (correctionsOpen) loadCorrections(); }, 10000);
+        setInterval(function() { if (corrLogOpen) loadCorrectionLog(); }, 3000);
         updateStatus();
         updateHistory();
         loadCorrectionLog();

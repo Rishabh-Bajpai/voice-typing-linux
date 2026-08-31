@@ -11,8 +11,14 @@ if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
 elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
     . "$HOME/anaconda3/etc/profile.d/conda.sh"
 elif [ -n "$CONDA_CMD" ]; then
-    echo "Conda found but conda.sh not found at expected paths."
-    exit 1
+    # conda is on PATH (e.g. micromamba, Miniforge, custom installs) — locate conda.sh
+    CONDA_BASE="$(conda info --base 2>/dev/null || true)"
+    if [ -n "$CONDA_BASE" ] && [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
+        . "$CONDA_BASE/etc/profile.d/conda.sh"
+    else
+        echo "Conda found but conda.sh not found. Run: conda shell.bash hook"
+        exit 1
+    fi
 else
     echo "Conda not found. Install Miniconda or Anaconda first."
     exit 1

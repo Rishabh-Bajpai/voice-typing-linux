@@ -216,31 +216,20 @@ except Exception:
         CONFIG["DEVICE_INDEX"] = _pulse_idx
         print(f"[MIGRATE] DEVICE_INDEX {old} invalid -> {DEVICE_INDEX} (pulse/default)", flush=True)
         try:
-            save_config({
-                "STT_ENDPOINT": STT_ENDPOINT,
-                "STT_MODEL": STT_MODEL,
-                "STT_LANGUAGE": STT_LANGUAGE,
-                "STT_API_KEY": STT_API_KEY,
-                "STREAMING_MODE": STREAMING_MODE,
-                "BEEP_ENABLED": BEEP_ENABLED,
-                "SILENCE_THRESHOLD": SILENCE_THRESHOLD,
-                "DEVICE_INDEX": DEVICE_INDEX,
-                "HOTKEY_STR": HOTKEY_STR,
-                "SILENCE_DURATION": SILENCE_DURATION,
-                "PULSE_SOURCE_NAME": PULSE_SOURCE_NAME,
-                "PUSH_TO_HOLD": PUSH_TO_HOLD,
-                "CLIPBOARD_MODE": CLIPBOARD_MODE,
-                "LLM_ACTION": LLM_ACTION,
-                "LLM_INSTRUCTION": LLM_INSTRUCTION,
-                "OPENAI_BASE_URL": OPENAI_BASE_URL,
-                "OPENAI_CHAT_MODEL_ID": OPENAI_CHAT_MODEL_ID,
-                "OPENAI_API_KEY": OPENAI_API_KEY,
-                "WAKE_WORD": WAKE_WORD,
-                "COMMAND_URL": COMMAND_URL,
-                "INITIAL_PROMPT": INITIAL_PROMPT,
-                "BEEP_VOLUME": BEEP_VOLUME,
-                "BACKSPACE_AFTER_HOTKEY": BACKSPACE_AFTER_HOTKEY,
-            })
+            # Update only DEVICE_INDEX in the existing config file, preserving all
+            # other keys and never persisting secrets (STT_API_KEY / OPENAI_* live in .env).
+            _migrated_cfg = {}
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, "r") as _f:
+                    try:
+                        _loaded_cfg = json.load(_f)
+                        if isinstance(_loaded_cfg, dict):
+                            _migrated_cfg = _loaded_cfg
+                    except Exception:
+                        _migrated_cfg = {}
+            _migrated_cfg["DEVICE_INDEX"] = DEVICE_INDEX
+            with open(CONFIG_FILE, "w") as _f:
+                json.dump(_migrated_cfg, _f, indent=4)
         except Exception as _e:
             print(f"[MIGRATE] save failed: {_e}", flush=True)
     except Exception as _e:
@@ -612,13 +601,14 @@ class VoiceDictationApp:
         return {"success": False, "error": "Correction not found"}
 
     def correct_history_entry(self, index, new_text):
-        if index < 0 or index >= len(self.transcription_history):
-            return {"success": False, "error": "History entry not found"}
-        entry = self.transcription_history[index]
-        old_text = entry["text"]
-        if old_text == new_text:
-            return {"success": True, "changed": False, "suggestions": []}
-        entry["text"] = new_text
+        with self._history_lock:
+            if index < 0 or index >= len(self.transcription_history):
+                return {"success": False, "error": "History entry not found"}
+            entry = self.transcription_history[index]
+            old_text = entry["text"]
+            if old_text == new_text:
+                return {"success": True, "changed": False, "suggestions": []}
+            entry["text"] = new_text
         self._save_history()
         suggestions = suggest_corrections(old_text, new_text)
         for s in suggestions:
